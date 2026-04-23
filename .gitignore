@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+
+# Ambiente / segredos
+.env
+
+# Outputs gerados
+reports/
+*.xlsx
+*.csv
+*.html
+*.pdf
+
+# VS Code
+.vscode/
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
