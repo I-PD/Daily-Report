@@ -1,0 +1,98 @@
+@page {
+    size: A4 landscape;
+    margin: 12mm;
+  }
+  
+  body {
+    font-family: Arial, sans-serif;
+    background: #ffffff;
+    color: #111111;
+    margin: 0;
+    padding: 0;
+  }
+  
+  .page {
+    width: 100%;
+  }
+  
+  .report-header {
+    margin-bottom: 18px;
+  }
+  
+  .report-header h1 {
+    font-size: 20px;
+    margin: 0 0 6px 0;
+    color: #111111;
+  }
+  
+  .report-date {
+    font-size: 20px;
+    color: #c8d2e0;
+  }
+  
+  .blocks-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+  }
+  
+  .metric-block {
+    border: 1px solid #2b3340;
+    background: #111827;
+  }
+  
+  /* .block-title {
+    text-align: center;
+    color: #6aa7ff;
+    font-weight: bold;
+    font-size: 14px;
+    padding: 8px;
+    border-bottom: 1px solid #2b3340;
+    text-transform: uppercase;
+  } */
+  .block-title {
+    text-align: center;
+    color: #1f1f1f;
+    font-weight: bold;
+    font-size: 14px;
+    padding: 8px;
+    border-bottom: 1px solid #d0d0d0;
+    background: #f3f4f6;
+    text-transform: uppercase;
+  }
+  
+  .cards-grid.single-card {
+    grid-template-columns: 1fr;
+  }
+
+  .cards-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+  }
+  
+  .metric-card {
+    min-height: 110px;
+    border-right: 1px solid #2b3340;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    padding: 10px;
+    box-sizing: border-box;
+  }
+  
+  .metric-card:last-child {
+    border-right: none;
+  }
+  
+  .metric-label {
+    font-size: 12px;
+    margin-bottom: 10px;
+    text-align: center;
+  }
+  
+  .metric-value {
+    font-size: 20px;
+    font-weight: bold;
+    text-align: center;
+  }

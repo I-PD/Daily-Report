@@ -1,2 +1,4 @@
 psycopg2-binary>=2.9.10
-XlsxWriter==3.2.0
+Jinja2==3.1.4
+playwright==1.53.0
+python-dotenv==1.0.1

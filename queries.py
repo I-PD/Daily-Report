@@ -1,3 +1,8 @@
+##### queries.py #####
+# quarda queries SQL
+# cada query é uma string multi-linha, e deve ser escrita de forma a ser legível e fácil de manter
+##################
+
 QUERY_TEMPO_PRODUCAO_MD = """
 WITH
 now_ctx AS (
@@ -504,4 +509,23 @@ SELECT
   round(t3_oee, 1) AS "T3(00-08)",
   round(total_oee, 1) AS "TOTAL"
 FROM pivot;
+"""
+QUERY_TOTAL_SILOS_8H = """
+WITH ref AS (
+    SELECT
+        (
+            date_trunc('day', now() AT TIME ZONE 'Europe/Lisbon')
+            + interval '8 hours'
+        ) AT TIME ZONE 'Europe/Lisbon' AS ref_ts
+)
+SELECT SUM(qtd_silo) AS "TOTAL"
+FROM (
+    SELECT DISTINCT ON (silo_id)
+        silo_id,
+        qtd_silo
+    FROM trituracao.silos1a5, ref
+    WHERE silo_id BETWEEN 1 AND 5
+      AND created_at <= ref.ref_ts
+    ORDER BY silo_id, created_at DESC
+) t;
 """

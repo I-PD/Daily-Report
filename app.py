@@ -1,54 +1,130 @@
+##### app.py #####
+# 1) Lê variáveis do ficheiro .env
+# 2) Liga à base de dados PostgreSQL
+# 3) Executa as queries do report diário
+# 4) Monta os blocos visuais (cards) para o relatório
+# 5) Renderiza HTML com template + CSS
+# 6) Gera PDF
+# 7) Envia e-mail com o PDF em anexo
+##################
 from __future__ import annotations
 
-#import csv
 import os
-#import re
 import smtplib
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from email.message import EmailMessage
 from email.utils import formatdate
 from pathlib import Path
-from typing import Iterable
-from dotenv import load_dotenv
-from pathlib import Path
 
+from dotenv import load_dotenv
+from jinja2 import Environment, FileSystemLoader
 import psycopg2
 from psycopg2.extras import RealDictCursor
-import xlsxwriter
+from playwright.sync_api import sync_playwright
 
 from queries import (
     QUERY_TEMPO_PRODUCAO_MD,
     QUERY_HORAS_MOINHOS,
     QUERY_KGS_SILOS,
     QUERY_OEE,
+    QUERY_TOTAL_SILOS_8H,
 )
 
+# Configuração base do projeto
+# Carrega o ficheiro .env que está na mesma pasta do app.py
 load_dotenv(Path(__file__).with_name(".env"))
+
+# Pasta base do projeto
 BASE_DIR = Path(__file__).resolve().parent
+
+# Pasta onde vamos guardar os reports gerados
 REPORTS_DIR = BASE_DIR / "reports"
 REPORTS_DIR.mkdir(exist_ok=True)
 
+# Pasta dos templates HTML
+TEMPLATES_DIR = BASE_DIR / "templates"
+
+# Pasta do CSS estático
+STATIC_DIR = BASE_DIR / "static"
+
+# Modelos de dados do relatório
 @dataclass
-class ReportTable:
+class MetricCard:
+    """
+    Representa um cartão individual do dashboard/report.
+    Exemplo:
+        label = "T1(08-16)"
+        value = "05h33 (49%)"
+    """
+    label: str
+    value: str
+    bg_color: str = "#d9d9e3"
+    text_color: str = "#111111"
+
+@dataclass
+class MetricBlock:
+    """
+    Representa um bloco completo do report.
+    Cada bloco tem um título e 4 cartões:
+        T1, T2, T3 e TOTAL
+    """
     key: str
     title: str
-    sheet_name: str
-    values: dict[str, object]
+    cards: list[MetricCard]
 
+# Regras visuais / cores
+def get_oee_colors(value: float) -> tuple[str, str]:
+    """
+    Devolve as cores de fundo e texto para OEE,
+    de forma semelhante aos thresholds do Grafana.
+
+    Regras:
+    - < 70   -> vermelho
+    - < 80   -> amarelo
+    - >= 80  -> verde
+    """
+    if value < 70:
+        return "#f2495c", "#ffffff"
+    if value < 80:
+        return "#eab839", "#111111"
+    return "#73bf69", "#ffffff"
+
+
+def default_card_style(is_total: bool) -> tuple[str, str]:
+    """
+    Estilo por defeito dos cartões.
+    - cartões normais: fundo claro
+    - TOTAL: fundo cinzento escuro
+    """
+    if is_total:
+        return "#6b6b6b", "#ffffff"
+    return "#d9d9e3", "#111111"
+
+# Regras de data do relatório
 def get_report_date() -> datetime:
+    """
+    Define a data de referência do relatório:
+    - se hoje é segunda-feira -> devolve sexta-feira
+    - caso contrário -> devolve ontem
+    """
     today = datetime.now()
-    if today.weekday() == 0:
+    if today.weekday() == 0:  # segunda-feira
         return today - timedelta(days=3)
     return today - timedelta(days=1)
 
-def parse_time_pct(value: str) -> tuple[str, int]:
-    match = re.fullmatch(r"\s*([0-9]{2}h[0-9]{2})\s*\((\d+)%\)\s*", value)
-    if not match:
-        raise ValueError(f"Formato inesperado vindo da query: {value!r}")
-    return match.group(1), int(match.group(2))
+def get_today_local_date() -> str:
+    """
+    Devolve a data local de hoje em formato dd/mm/YYYY.
+    """
+    return datetime.now().strftime("%d/%m/%Y")
 
+# Ligação à base de dados
 def get_db_connection():
+    """
+    Abre ligação à base de dados PostgreSQL usando as
+    variáveis definidas no .env.
+    """
     return psycopg2.connect(
         host=os.environ["DB_HOST"],
         port=int(os.environ.get("DB_PORT", "5432")),
@@ -57,7 +133,42 @@ def get_db_connection():
         password=os.environ["DB_PASSWORD"],
         cursor_factory=RealDictCursor,
     )
+
+#  Formatação de valores dentro das células
+def format_kg(value: object) -> str:
+    """
+    Formata um valor de kg sem casas decimais.
+    Ex.: 10425.0 -> '10425 kg'
+    """
+    if value is None:
+        return "0 kg"
+    return f"{int(round(float(value)))} kg"
+
+
+def format_pct(value: object) -> str:
+    """
+    Formata um valor percentual com 1 casa decimal.
+    Ex.: 73.6 -> '73.6 %'
+    """
+    if value is None:
+        return "0 %"
+    return f"{float(value):.1f} %"
+
+# Execução genérica de queries
 def run_single_row_query(query: str, params: dict | None = None) -> dict[str, object]:
+    """
+    Executa uma query que deve devolver apenas UMA linha,
+    com colunas do tipo:
+        T1(08-16), T2(16-24), T3(00-08), TOTAL
+
+    Exemplo de saída:
+        {
+            "T1(08-16)": "05h33 (49%)",
+            "T2(16-24)": "00h45 (36%)",
+            "T3(00-08)": "05h05 (28%)",
+            "TOTAL": "11h24 (39%)",
+        }
+    """
     with get_db_connection() as conn:
         with conn.cursor() as cur:
             if params:
@@ -72,211 +183,386 @@ def run_single_row_query(query: str, params: dict | None = None) -> dict[str, ob
     ordered_labels = ["T1(08-16)", "T2(16-24)", "T3(00-08)", "TOTAL"]
     return {label: row.get(label) for label in ordered_labels if label in row}
 
-def get_tables_data() -> list[ReportTable]:
+# Construção dos blocos do relatório
+def build_standard_block(key: str, title: str, values: dict[str, object]) -> MetricBlock:
+    """
+    Constrói um bloco 'normal' do relatório:
+    - Tempo Produção MD
+    - Horas Trabalhadas
+    - Kgs Produzidos
+
+    Estes blocos usam cartões claros e TOTAL em cinzento.
+    """
+    cards: list[MetricCard] = []
+
+    for label in ["T1(08-16)", "T2(16-24)", "T3(00-08)", "TOTAL"]:
+        bg_color, text_color = default_card_style(label == "TOTAL")
+
+        cards.append(
+            MetricCard(
+                label=label,
+                value=str(values.get(label, "")),
+                bg_color=bg_color,
+                text_color=text_color,
+            )
+        )
+
+    return MetricBlock(
+        key=key,
+        title=title,
+        cards=cards,
+    )
+
+def build_kg_block(key: str, title: str, values: dict[str, object]) -> MetricBlock:
+    cards: list[MetricCard] = []
+
+    for label in ["T1(08-16)", "T2(16-24)", "T3(00-08)", "TOTAL"]:
+        bg_color, text_color = default_card_style(label == "TOTAL")
+
+        cards.append(
+            MetricCard(
+                label=label,
+                value=format_kg(values.get(label, 0)),
+                bg_color=bg_color,
+                text_color=text_color,
+            )
+        )
+
+    return MetricBlock(
+        key=key,
+        title=title,
+        cards=cards,
+    )
+
+def run_scalar_query(query: str, params: dict | None = None) -> object:
+    """
+    Executa uma query que devolve uma única linha e uma única coluna.
+    Exemplo:
+        SELECT 123 AS "TOTAL"
+    """
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            if params:
+                cur.execute(query, params)
+            else:
+                cur.execute(query)
+            row = cur.fetchone()
+
+    if not row:
+        raise RuntimeError("A query escalar não devolveu resultados.")
+
+    return next(iter(row.values()))
+
+def build_single_total_block(title: str, value: object, suffix: str = "") -> MetricBlock:
+    """
+    Constrói um bloco com um único cartão grande.
+    """
+    #text_value = f"{value}{suffix}" if suffix else str(value)
+
+    return MetricBlock(
+        key="total_silos_8h",
+        title=title,
+        cards=[
+            MetricCard(
+                label="TOTAL",
+                value=format_kg(value),
+                bg_color="#d9d9e3",
+                text_color="#111111",
+            )
+        ],
+    )
+
+def build_oee_block(values: dict[str, object]) -> MetricBlock:
+    """
+    Constrói o bloco de OEE.
+    Aqui cada cartão recebe cor em função do valor do OEE.
+    """
+    cards: list[MetricCard] = []
+
+    for label in ["T1(08-16)", "T2(16-24)", "T3(00-08)", "TOTAL"]:
+        numeric_value = float(values.get(label, 0) or 0)
+        bg_color, text_color = get_oee_colors(numeric_value)
+
+        cards.append(
+            MetricCard(
+                label=label,
+                #value=f"{numeric_value:.1f} %",
+                value=format_pct(numeric_value),
+                bg_color=bg_color,
+                text_color=text_color,
+            )
+        )
+
+    return MetricBlock(
+        key="oee_trituracao",
+        title="Dia Anterior - Cálculo OEE",
+        cards=cards,
+    )
+
+def get_daily_blocks() -> list[MetricBlock]:
+    """
+    Vai buscar os dados do report diário e transforma cada query
+    num bloco visual do relatório.
+
+    Se USE_MOCK_DATA=true, usa dados fictícios para testes.
+    Caso contrário, executa as queries reais da base de dados.
+    """
+    today_label = get_today_local_date()
     use_mock = os.environ.get("USE_MOCK_DATA", "false").lower() == "true"
 
     if use_mock:
         return [
-            ReportTable(
-                key="tempo_producao_md",
-                title="Tempo Produção MD",
-                sheet_name="01_Tempo_MD",
-                values={
+            build_single_total_block(
+            f"Total Silos AD 1 a 5 às 8h ({today_label})",
+            11864,
+            " kg",
+            ),
+            build_standard_block(
+                "tempo_producao_md",
+                "Dia Anterior - Tempo Produção MD",
+                {
                     "T1(08-16)": "05h33 (49%)",
                     "T2(16-24)": "00h45 (36%)",
                     "T3(00-08)": "05h05 (28%)",
                     "TOTAL": "11h24 (39%)",
                 },
             ),
-            ReportTable(
-                key="horas_moinhos",
-                title="Nº Horas Trabalhadas Moinhos",
-                sheet_name="02_Horas_Moinhos",
-                values={
-                    "T1(08-16)": "07h10",
-                    "T2(16-24)": "06h50",
-                    "T3(00-08)": "07h20",
-                    "TOTAL": "21h20",
+            build_standard_block(
+                "tempo_producao_md",
+                "Dia Anterior - Tempo Produção MD",
+                {
+                    "T1(08-16)": "05h33 (49%)",
+                    "T2(16-24)": "00h45 (36%)",
+                    "T3(00-08)": "05h05 (28%)",
+                    "TOTAL": "11h24 (39%)",
                 },
             ),
-            ReportTable(
-                key="kgs_silos",
-                title="Kgs Produzidos nos Silos",
-                sheet_name="03_Kgs_Silos",
-                values={
-                    "T1(08-16)": 12000,
-                    "T2(16-24)": 9800,
-                    "T3(00-08)": 11150,
-                    "TOTAL": 32950,
+            build_standard_block(
+                "horas_moinhos",
+                "Dia Anterior - Nº Horas Trabalhadas (Moinhos)",
+                {
+                    "T1(08-16)": "07h44",
+                    "T2(16-24)": "02h30",
+                    "T3(00-08)": "06h35",
+                    "TOTAL": "16h51",
                 },
             ),
-            ReportTable(
-                key="oee_trituracao",
-                title="OEE da Secção",
-                sheet_name="04_OEE",
-                values={
-                    "T1(08-16)": 68.4,
-                    "T2(16-24)": 54.2,
-                    "T3(00-08)": 60.1,
-                    "TOTAL": 61.0,
+            build_standard_block(
+                "kgs_silos",
+                "Dia Anterior - Kgs Produzidos (Silos 1 a 5)",
+                {
+                    "T1(08-16)": "11496 kg",
+                    "T2(16-24)": "3558 kg",
+                    "T3(00-08)": "10572 kg",
+                    "TOTAL": "25626 kg",
                 },
+            ),
+            build_oee_block(
+                {
+                    "T1(08-16)": 99.1,
+                    "T2(16-24)": 30.7,
+                    "T3(00-08)": 91.1,
+                    "TOTAL": 73.6,
+                }
             ),
         ]
 
+    # Executa as queries reais e monta os blocos
+    today_label = get_today_local_date()
+
+    total_silos_8h = run_scalar_query(QUERY_TOTAL_SILOS_8H)
+    tempo_values = run_single_row_query(QUERY_TEMPO_PRODUCAO_MD)
+    horas_values = run_single_row_query(QUERY_HORAS_MOINHOS)
+    kgs_values = run_single_row_query(QUERY_KGS_SILOS)
+    oee_values = run_single_row_query(QUERY_OEE)
+
     return [
-        ReportTable(
-            key="tempo_producao_md",
-            title="Tempo Produção MD",
-            sheet_name="01_Tempo_MD",
-            values=run_single_row_query(QUERY_TEMPO_PRODUCAO_MD),
+        build_standard_block(
+            "tempo_producao_md",
+            "Dia Anterior - Tempo Produção MD",
+            tempo_values,
         ),
-        ReportTable(
-            key="horas_moinhos",
-            title="Nº Horas Trabalhadas Moinhos",
-            sheet_name="02_Horas_Moinhos",
-            values=run_single_row_query(QUERY_HORAS_MOINHOS),
+        build_standard_block(
+            "horas_moinhos",
+            "Dia Anterior - Nº Horas Trabalhadas (Moinhos)",
+            horas_values,
         ),
-        ReportTable(
-            key="kgs_silos",
-            title="Kgs Produzidos nos Silos",
-            sheet_name="03_Kgs_Silos",
-            values=run_single_row_query(QUERY_KGS_SILOS),
+        # build_standard_block(
+        #     "kgs_silos",
+        #     "Dia Anterior - Kgs Produzidos (Silos)",
+        #     kgs_values,
+        # ),
+        build_kg_block(
+            "kgs_silos",
+            "Dia Anterior - Kgs Produzidos (Silos 1 a 5)",
+            kgs_values,
         ),
-        ReportTable(
-            key="oee_trituracao",
-            title="OEE da Secção",
-            sheet_name="04_OEE",
-            values=run_single_row_query(QUERY_OEE),
+        build_oee_block(oee_values),
+        build_single_total_block(
+            f"Total Silos AD 1 a 5 às 8h ({today_label})",
+            #round(float(total_silos_8h), 0),
+            total_silos_8h,
+            " kg",
         ),
     ]
 
-def build_html_summary(report_date: datetime, tables: list[ReportTable]) -> str:
+# Renderização HTML para e-mail
+def render_email_html(report_date: datetime, blocks: list[MetricBlock]) -> str:
+    """
+    Gera o HTML do corpo do e-mail num formato simples e estável,
+    mais adequado para Outlook e outros clientes de e-mail.
+
+    Este HTML é separado do HTML do PDF:
+    - e-mail -> simples, tabelas clássicas
+    - PDF    -> layout tipo dashboard
+    """
     parts = [
-        "<html><head><meta charset='UTF-8'></head><body style='font-family:Arial;'>",
-        f"<h2>Relatório Diário - Trituração - {report_date.strftime('%d/%m/%Y')}</h2>",
-        "<p>Segue em anexo o ficheiro Excel com o detalhe.</p>",
+        "<html><head><meta charset='UTF-8'></head>",
+        "<body style='font-family: Arial, sans-serif; color:#111111; background:#ffffff;'>",
+        f"<h2 style='margin-bottom:8px;'>Relatório Diário - Trituração - {report_date.strftime('%d/%m/%Y')}</h2>",
+        "<p style='margin-top:0;'>Segue em anexo o relatório diário em PDF.</p>",
     ]
 
-    for table in tables:
-        parts.append(f"<h3>{table.title}</h3>")
+    for block in blocks:
+        parts.append(
+            f"<h3 style='margin:20px 0 8px 0; color:#111111;'>{block.title}</h3>"
+        )
+
+        # Caso especial: bloco com um único cartão
+        if len(block.cards) == 1:
+            card = block.cards[0]
+            parts.append(
+                f"""
+                <table style="border-collapse:collapse; width:100%; max-width:900px; margin-bottom:18px;">
+                  <tr>
+                    <th style="border:1px solid #cfcfcf; padding:8px; background:#666666; color:#ffffff; text-align:center;">
+                      {card.label}
+                    </th>
+                  </tr>
+                  <tr>
+                    <td style="
+                        border:1px solid #cfcfcf;
+                        padding:18px 10px;
+                        text-align:center;
+                        background:{card.bg_color};
+                        color:{card.text_color};
+                        font-size:18px;
+                        font-weight:bold;
+                    ">
+                        {card.value}
+                    </td>
+                  </tr>
+                </table>
+                """
+            )
+            continue
+
+        # Blocos normais com 4 cartões
         parts.append(
             """
-            <table style="border-collapse:collapse; margin-bottom:20px;">
+            <table style="border-collapse:collapse; width:100%; max-width:900px; margin-bottom:18px;">
               <tr>
-                <th style="border:1px solid #999; padding:8px; background:#dce6f1;">T1(08-16)</th>
-                <th style="border:1px solid #999; padding:8px; background:#dce6f1;">T2(16-24)</th>
-                <th style="border:1px solid #999; padding:8px; background:#dce6f1;">T3(00-08)</th>
-                <th style="border:1px solid #999; padding:8px; background:#666; color:#fff;">TOTAL</th>
+                <th style="border:1px solid #cfcfcf; padding:8px; background:#e9e9ef; text-align:center;">T1(08-16)</th>
+                <th style="border:1px solid #cfcfcf; padding:8px; background:#e9e9ef; text-align:center;">T2(16-24)</th>
+                <th style="border:1px solid #cfcfcf; padding:8px; background:#e9e9ef; text-align:center;">T3(00-08)</th>
+                <th style="border:1px solid #cfcfcf; padding:8px; background:#666666; color:#ffffff; text-align:center;">TOTAL</th>
               </tr>
+              <tr>
             """
         )
-        parts.append("<tr>")
-        for label in ["T1(08-16)", "T2(16-24)", "T3(00-08)", "TOTAL"]:
-            value = table.values.get(label, "")
+
+        for card in block.cards:
             parts.append(
-                f"<td style='border:1px solid #999; padding:8px; text-align:center;'>{value}</td>"
+                f"""
+                <td style="
+                    border:1px solid #cfcfcf;
+                    padding:14px 10px;
+                    text-align:center;
+                    background:{card.bg_color};
+                    color:{card.text_color};
+                    font-size:16px;
+                    font-weight:bold;
+                ">
+                    <div style="font-size:12px; font-weight:normal; margin-bottom:8px;">{card.label}</div>
+                    <div>{card.value}</div>
+                </td>
+                """
             )
+
         parts.append("</tr></table>")
 
     parts.append("</body></html>")
     return "".join(parts)
 
-def export_html(html: str, report_date: datetime) -> Path:
-    path = BASE_DIR / f"trituracao_{report_date.strftime('%d_%m_%Y')}.html"
+# Renderização HTML
+def render_html(report_date: datetime, blocks: list[MetricBlock]) -> str:
+    """
+    Renderiza o HTML final do report com base num template Jinja2.
+    O CSS é carregado a partir da pasta static/.
+    """
+    env = Environment(loader=FileSystemLoader(TEMPLATES_DIR))
+    template = env.get_template("daily_report.html")
+
+    css_path = (STATIC_DIR / "report.css").resolve().as_uri()
+
+    return template.render(
+        report_date=report_date.strftime("%d/%m/%Y"),
+        blocks=blocks,
+        css_path=css_path,
+    )
+
+def export_debug_html(html: str, report_date: datetime) -> Path:
+    """
+    Guarda uma cópia HTML local do report para debug visual.
+    Útil para abrir no browser e ajustar layout antes do PDF.
+    """
+    path = REPORTS_DIR / f"trituracao_{report_date.strftime('%d_%m_%Y')}.html"
     path.write_text(html, encoding="utf-8")
     return path
 
-def export_xlsx(tables: list[ReportTable], report_date: datetime) -> Path:
-    path = REPORTS_DIR / f"trituracao_{report_date.strftime('%d_%m_%Y')}.xlsx"
-    workbook = xlsxwriter.Workbook(path.as_posix())
+# Geração de PDF
+def export_pdf(html: str, report_date: datetime) -> Path:
+    path = REPORTS_DIR / f"trituracao_{report_date.strftime('%d_%m_%Y')}.pdf"
+    html_path = REPORTS_DIR / f"trituracao_{report_date.strftime('%d_%m_%Y')}.html"
+    html_path.write_text(html, encoding="utf-8")
 
-    title_fmt = workbook.add_format({
-        "bold": True,
-        "font_size": 14,
-        "align": "center",
-        "valign": "vcenter",
-        "font_color": "#6AA7FF", 
-        "bg_color": "#0F2238",
-        "border": 1,
-    })
-    header_fmt = workbook.add_format({
-        "bold": True,
-        "align": "center",
-        "valign": "vcenter",
-        "bg_color": "#DCE6F1",
-        "border": 1,
-    })
-    normal_fmt = workbook.add_format({
-        "align": "center",
-        "valign": "vcenter",
-        "border": 1,
-    })
-    total_fmt = workbook.add_format({
-        "bold": True,
-        "font_color": "#FFFFFF",
-        "bg_color": "#666666",
-        "align": "center",
-        "valign": "vcenter",
-        "border": 1,
-    })
-    percent_fmt = workbook.add_format({
-        "align": "center",
-        "valign": "vcenter",
-        "border": 1,
-        "num_format": "0.0",
-    })
-    number_fmt = workbook.add_format({
-        "align": "center",
-        "valign": "vcenter",
-        "border": 1,
-        "num_format": "#,##0.00",
-    })
-
-    for table in tables:
-        sheet = workbook.add_worksheet(table.sheet_name[:31])
-
-        sheet.merge_range(
-            "A1:E1",
-            f"{table.title} - {report_date.strftime('%d/%m/%Y')}",
-            title_fmt,
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        page.goto(html_path.resolve().as_uri(), wait_until="load")
+        page.pdf(
+            path=str(path),
+            format="A4",
+            landscape=True,
+            print_background=True,
+            margin={
+                "top": "10mm",
+                "right": "10mm",
+                "bottom": "10mm",
+                "left": "10mm",
+            },
         )
-        sheet.write_row("A3", ["Indicador", "T1(08-16)", "T2(16-24)", "T3(00-08)", "TOTAL"], header_fmt)
+        browser.close()
 
-        sheet.write("A4", table.title, normal_fmt)
-
-        for col_idx, label in enumerate(["T1(08-16)", "T2(16-24)", "T3(00-08)", "TOTAL"], start=1):
-            value = table.values.get(label, "")
-
-            cell_fmt = total_fmt if label == "TOTAL" else normal_fmt
-
-            if isinstance(value, (int, float)):
-                if table.key == "oee_trituracao":
-                    fmt = total_fmt if label == "TOTAL" else percent_fmt
-                    sheet.write_number(3, col_idx, float(value), fmt)
-                else:
-                    fmt = total_fmt if label == "TOTAL" else number_fmt
-                    sheet.write_number(3, col_idx, float(value), fmt)
-            else:
-                sheet.write(3, col_idx, str(value), cell_fmt)
-
-        sheet.set_column("A:A", 28)
-        sheet.set_column("B:E", 16)
-        sheet.set_row(0, 26)
-
-    workbook.close()
     return path
 
-def build_plain_text(report_date: datetime, tables: list[ReportTable]) -> str:
-    lines = [f"Relatório Diário - Trituração - {report_date.strftime('%d/%m/%Y')}", ""]
-    for table in tables:
-        lines.append(table.title)
-        for label in ["T1(08-16)", "T2(16-24)", "T3(00-08)", "TOTAL"]:
-            lines.append(f"  - {label}: {table.values.get(label, '')}")
-        lines.append("")
-    return "\n".join(lines)
+# Texto simples para fallback do e-mail
+def build_plain_text(report_date: datetime) -> str:
+    """
+    Corpo simples em texto puro para clientes de e-mail
+    que não renderizam HTML corretamente.
+    """
+    return (
+        f"Relatório Diário - Trituração - {report_date.strftime('%d/%m/%Y')}\n\n"
+        "Segue em anexo o relatório diário em PDF."
+    )
 
-
+# Envio de e-mail
 def send_email(subject: str, html_body: str, text_body: str, attachments: list[Path]) -> None:
+    """
+    Envia o e-mail via SMTP, com corpo em texto + HTML
+    e com os anexos fornecidos.
+    """
     smtp_host = os.environ["SMTP_HOST"]
     smtp_port = int(os.environ.get("SMTP_PORT", "587"))
     smtp_user = os.environ["SMTP_USER"]
@@ -290,24 +576,31 @@ def send_email(subject: str, html_body: str, text_body: str, attachments: list[P
     msg["From"] = smtp_sender
     msg["To"] = ", ".join(smtp_to)
     msg["Date"] = formatdate(localtime=True)
+
+    # Corpo em texto simples
     msg.set_content(text_body)
+
+    # Corpo HTML
     msg.add_alternative(html_body, subtype="html")
 
+    # Anexos
     for attachment in attachments:
         with attachment.open("rb") as f:
             data = f.read()
-        if attachment.suffix.lower() == ".html":
+
+        if attachment.suffix.lower() == ".pdf":
+            maintype, subtype = "application", "pdf"
+        elif attachment.suffix.lower() == ".html":
             maintype, subtype = "text", "html"
-        elif attachment.suffix.lower() == ".csv":
-            maintype, subtype = "text", "csv"
-        elif attachment.suffix.lower() == ".xlsx":
-            maintype, subtype = (
-                "application",
-                "vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
         else:
             maintype, subtype = "application", "octet-stream"
-        msg.add_attachment(data, maintype=maintype, subtype=subtype, filename=attachment.name)
+
+        msg.add_attachment(
+            data,
+            maintype=maintype,
+            subtype=subtype,
+            filename=attachment.name,
+        )
 
     with smtplib.SMTP(smtp_host, smtp_port) as server:
         server.ehlo()
@@ -317,25 +610,40 @@ def send_email(subject: str, html_body: str, text_body: str, attachments: list[P
         server.login(smtp_user, smtp_password)
         server.send_message(msg)
 
+# Função principal
 def main() -> None:
+    """
+    Fluxo principal:
+    1) calcula data do report
+    2) vai buscar os blocos
+    3) renderiza HTML do PDF
+    4) renderiza HTML do e-mail (separado, mais simples)
+    5) guarda HTML de debug do PDF
+    6) gera PDF
+    7) envia por e-mail
+    """
     report_date = get_report_date()
-    tables = get_tables_data()
+    blocks = get_daily_blocks()
 
-    html = build_html_summary(report_date, tables)
-    xlsx_path = export_xlsx(tables, report_date)
+    pdf_html = render_html(report_date, blocks)
+    email_html = render_email_html(report_date, blocks)
+
+    debug_html_path = export_debug_html(pdf_html, report_date)
+    pdf_path = export_pdf(pdf_html, report_date)
 
     if os.environ.get("SEND_EMAIL", "true").lower() == "true":
         send_email(
             subject=f"Relatório Diário - Trituração - {report_date.strftime('%d/%m/%Y')}",
-            html_body=html,
-            text_body=build_plain_text(report_date, tables),
-            attachments=[xlsx_path],
+            html_body=email_html,
+            text_body=build_plain_text(report_date),
+            attachments=[pdf_path],
         )
         print("E-mail enviado com sucesso.")
     else:
         print("SEND_EMAIL=false, e-mail não enviado.")
 
-    print(f"XLSX criado: {xlsx_path}")
+    print(f"HTML debug criado: {debug_html_path}")
+    print(f"PDF criado: {pdf_path}")
 
 if __name__ == "__main__":
     main()
