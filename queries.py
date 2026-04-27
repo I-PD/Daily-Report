@@ -790,3 +790,190 @@ ORDER BY
     ELSE 99
   END;
 """
+QUERY_DESINF_VINC_DESINFECOES_DIA_ANTERIOR = """
+WITH
+now_ctx AS (
+  SELECT
+    (now() AT TIME ZONE 'Europe/Lisbon')::timestamp AS now_local
+),
+base AS (
+  SELECT
+    CASE
+      WHEN EXTRACT(ISODOW FROM now_local) = 1
+        THEN (date_trunc('day', now_local) - interval '3 day')::timestamp
+      ELSE (date_trunc('day', now_local) - interval '1 day')::timestamp
+    END AS day_ref_local
+  FROM now_ctx
+),
+shift_def AS (
+  SELECT * FROM (VALUES
+    (1, 'T1 (08-16)', interval '8 hours',  interval '16 hours'),
+    (2, 'T2 (16-24)', interval '16 hours', interval '24 hours'),
+    (3, 'T3 (00-08)', interval '24 hours', interval '32 hours')
+  ) v(turno_id, turno, start_off, end_off)
+),
+shifts AS (
+  SELECT
+    sd.turno_id,
+    sd.turno,
+    b.day_ref_local + sd.start_off AS start_local,
+    b.day_ref_local + sd.end_off   AS end_local
+  FROM base b
+  CROSS JOIN shift_def sd
+),
+raw_data AS (
+  SELECT
+    'VAPEX 1' AS vapex,
+    record_id,
+    created_at,
+    (created_at AT TIME ZONE 'Europe/Lisbon')::timestamp AS created_at_local,
+    operation_id,
+    tempo_teorico
+  FROM desinfecao.machine_1
+
+  UNION ALL
+
+  SELECT
+    'VAPEX 2' AS vapex,
+    record_id,
+    created_at,
+    (created_at AT TIME ZONE 'Europe/Lisbon')::timestamp AS created_at_local,
+    operation_id,
+    tempo_teorico
+  FROM desinfecao.machine_2
+
+  UNION ALL
+
+  SELECT
+    'VAPEX 3' AS vapex,
+    record_id,
+    created_at,
+    (created_at AT TIME ZONE 'Europe/Lisbon')::timestamp AS created_at_local,
+    operation_id,
+    tempo_teorico
+  FROM desinfecao.machine_3
+
+  UNION ALL
+
+  SELECT
+    'VAPEX 4' AS vapex,
+    record_id,
+    created_at,
+    (created_at AT TIME ZONE 'Europe/Lisbon')::timestamp AS created_at_local,
+    operation_id,
+    tempo_teorico
+  FROM desinfecao.machine_4
+),
+base_data AS (
+  SELECT
+    r.*,
+    LAG(operation_id) OVER (
+      PARTITION BY vapex
+      ORDER BY created_at, record_id
+    ) AS prev_operation_id
+  FROM raw_data r
+  CROSS JOIN base b
+  WHERE r.created_at_local >= b.day_ref_local - interval '12 hours'
+    AND r.created_at_local <  b.day_ref_local + interval '36 hours'
+    AND r.operation_id IS NOT NULL
+),
+marcados AS (
+  SELECT
+    *,
+    CASE
+      WHEN prev_operation_id IS DISTINCT FROM operation_id THEN 1
+      ELSE 0
+    END AS novo_ciclo
+  FROM base_data
+),
+grupos AS (
+  SELECT
+    *,
+    SUM(novo_ciclo) OVER (
+      PARTITION BY vapex
+      ORDER BY created_at, record_id
+    ) AS ciclo_grp
+  FROM marcados
+),
+ciclos AS (
+  SELECT
+    vapex,
+    ciclo_grp,
+    MIN(operation_id) AS operation_id,
+    MIN(created_at_local) AS inicio_ciclo_local,
+    MAX(tempo_teorico) AS tempo_teorico,
+    MIN(created_at_local) + (MAX(tempo_teorico) * interval '1 minute') AS fim_programado_local
+  FROM grupos
+  GROUP BY vapex, ciclo_grp
+),
+ciclos_validos AS (
+  SELECT *
+  FROM ciclos
+  WHERE tempo_teorico > 45
+),
+counts_by_shift AS (
+  SELECT
+    cv.vapex,
+    s.turno_id,
+    COUNT(*) AS qtd
+  FROM ciclos_validos cv
+  JOIN shifts s
+    ON cv.fim_programado_local >= s.start_local
+   AND cv.fim_programado_local <  s.end_local
+  GROUP BY cv.vapex, s.turno_id
+),
+pivot_vapex AS (
+  SELECT
+    vapex,
+    COALESCE(SUM(qtd) FILTER (WHERE turno_id = 1), 0) AS t1,
+    COALESCE(SUM(qtd) FILTER (WHERE turno_id = 2), 0) AS t2,
+    COALESCE(SUM(qtd) FILTER (WHERE turno_id = 3), 0) AS t3
+  FROM counts_by_shift
+  GROUP BY vapex
+),
+all_vapex AS (
+  SELECT * FROM (VALUES
+    ('VAPEX 1'),
+    ('VAPEX 2'),
+    ('VAPEX 3'),
+    ('VAPEX 4')
+  ) v(vapex)
+),
+rows_vapex AS (
+  SELECT
+    a.vapex,
+    COALESCE(p.t1, 0) AS t1,
+    COALESCE(p.t2, 0) AS t2,
+    COALESCE(p.t3, 0) AS t3
+  FROM all_vapex a
+  LEFT JOIN pivot_vapex p USING (vapex)
+),
+total_row AS (
+  SELECT
+    'TOTAL' AS vapex,
+    SUM(t1) AS t1,
+    SUM(t2) AS t2,
+    SUM(t3) AS t3
+  FROM rows_vapex
+)
+SELECT
+  vapex AS "VAPEX",
+  t1 AS "T1 (08-16)",
+  t2 AS "T2 (16-24)",
+  t3 AS "T3 (00-08)",
+  (t1 + t2 + t3) AS "Total"
+FROM (
+  SELECT * FROM rows_vapex
+  UNION ALL
+  SELECT * FROM total_row
+) x
+ORDER BY
+  CASE vapex
+    WHEN 'VAPEX 1' THEN 1
+    WHEN 'VAPEX 2' THEN 2
+    WHEN 'VAPEX 3' THEN 3
+    WHEN 'VAPEX 4' THEN 4
+    WHEN 'TOTAL' THEN 5
+    ELSE 99
+  END;
+"""

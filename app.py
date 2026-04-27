@@ -32,6 +32,7 @@ from queries import (
     QUERY_DESINF_TRIT_KGS_SILOS_DIA_ANTERIOR,
     QUERY_DESINF_TRIT_TOTAL_SILOS_8H,
     QUERY_CALIB_GRANULADO_DIA_ANTERIOR,
+    QUERY_DESINF_VINC_DESINFECOES_DIA_ANTERIOR,
 )
 
 # Configuração base do projeto
@@ -302,6 +303,47 @@ def build_calibracao_granulado_block(rows: list[dict[str, object]]) -> ReportTab
         rows=formatted_rows,
     )
 
+# Builder da tabela Desinfeção VINC
+def build_desinf_vinc_desinfecoes_block(rows: list[dict[str, object]]) -> ReportTableBlock:
+    formatted_rows: list[dict[str, object]] = []
+
+    for row in rows:
+        vapex = str(row.get("VAPEX", ""))
+        is_total_row = vapex == "TOTAL"
+
+        t1 = int(row.get("T1 (08-16)", 0) or 0)
+        t2 = int(row.get("T2 (16-24)", 0) or 0)
+        t3 = int(row.get("T3 (00-08)", 0) or 0)
+        total = int(row.get("Total", 0) or 0)
+
+        formatted_rows.append({
+            "VAPEX": vapex,
+            "T1 (08-16)": t1,
+            "T2 (16-24)": t2,
+            "T3 (00-08)": t3,
+            "Total": total,
+
+            # estilos por célula
+            "_styles": {} if is_total_row else {
+                "T1 (08-16)": "ok" if t1 >= 4 else "bad",
+                "T2 (16-24)": "ok" if t2 >= 4 else "bad",
+                "T3 (00-08)": "ok" if t3 >= 4 else "bad",
+            }
+        })
+
+    return ReportTableBlock(
+        key="desinf_vinc_desinfecoes_dia_anterior",
+        title="Dia Anterior - Nº Desinfeções",
+        headers=[
+            "VAPEX",
+            "T1 (08-16)",
+            "T2 (16-24)",
+            "T3 (00-08)",
+            "Total",
+        ],
+        rows=formatted_rows,
+    )
+
 def run_scalar_query(query: str, params: dict | None = None) -> object:
     """
     Executa uma query que devolve uma única linha e uma única coluna.
@@ -372,23 +414,10 @@ def build_oee_block(values: dict[str, object]) -> MetricBlock:
 # 1) Executar as queries reais
 # 2) Separar os blocos por secção
 # 3) Devolver uma estrutura organizada para o PDF e para o e-mail
-
-# A partir daqui, o relatório deixa de ser uma lista única de blocos
-# e passa a estar organizado por secções:
-# - Trituração
-# - Desinfeção Trituração
 def get_daily_sections() -> list[ReportSection]:
     today_label = get_today_local_date()
     report_date_label = get_report_date().strftime("%d/%m/%Y")
     # Secção: Trituração
-    # Dados referentes ao dia anterior:
-    # - Tempo Produção MD
-    # - Nº Horas Trabalhadas Moinhos
-    # - Kgs Produzidos Silos 1 a 5
-    # - OEE
-    # Dados referentes ao dia atual às 08h:
-    # - Total Silos AD 1 a 5
-
     total_silos_8h = run_scalar_query(QUERY_TRIT_TOTAL_SILOS_8H)
     tempo_values = run_single_row_query(QUERY_TEMPO_PRODUCAO_MD)
     horas_values = run_single_row_query(QUERY_HORAS_MOINHOS)
@@ -419,11 +448,6 @@ def get_daily_sections() -> list[ReportSection]:
     ]
 
     # Secção: Desinfeção Trituração
-    # Dados referentes ao dia anterior:
-    # - Kgs Produzidos Silos 6 a 10
-    # Dados referentes ao dia atual às 08h:
-    # - Total Silos PD 6 a 10
-
     desinf_kgs_values = run_single_row_query(
         QUERY_DESINF_TRIT_KGS_SILOS_DIA_ANTERIOR
     )
@@ -443,6 +467,7 @@ def get_daily_sections() -> list[ReportSection]:
         ),
     ]
 
+    # Secção: Calibração
     calibracao_rows = run_multi_row_query(
         QUERY_CALIB_GRANULADO_DIA_ANTERIOR
     )
@@ -451,9 +476,17 @@ def get_daily_sections() -> list[ReportSection]:
         build_calibracao_granulado_block(calibracao_rows),
     ]
 
+    # Secção: Desinfeção VINC
+    desinf_vinc_rows = run_multi_row_query(
+        QUERY_DESINF_VINC_DESINFECOES_DIA_ANTERIOR
+    )
+
+    desinf_vinc_blocks = [
+        build_desinf_vinc_desinfecoes_block(desinf_vinc_rows),
+    ]
+
     # Resultado final
     # O template HTML vai receber esta lista de secções e renderizar
-
     return [
         ReportSection(
             title=f"Trituração ({report_date_label})",
@@ -467,96 +500,13 @@ def get_daily_sections() -> list[ReportSection]:
             title=f"Calibração ({report_date_label})",
             blocks=calibracao_blocks,
         ),
+        ReportSection(
+            title=f"Desinfeção VINC ({report_date_label})",
+            blocks=desinf_vinc_blocks,
+        ),
     ]
 
 # Renderização HTML para e-mail
-# def render_email_html(report_date: datetime, blocks: list[MetricBlock]) -> str:
-#     """
-#     Gera o HTML do corpo do e-mail num formato simples e estável,
-#     mais adequado para Outlook e outros clientes de e-mail.
-
-#     Este HTML é separado do HTML do PDF:
-#     - e-mail -> simples, tabelas clássicas
-#     - PDF    -> layout tipo dashboard
-#     """
-#     parts = [
-#         "<html><head><meta charset='UTF-8'></head>",
-#         "<body style='font-family: Arial, sans-serif; color:#111111; background:#ffffff;'>",
-#         f"<h2 style='margin-bottom:8px;'>Relatório Diário - Trituração - {report_date.strftime('%d/%m/%Y')}</h2>",
-#         "<p style='margin-top:0;'>Segue em anexo o relatório diário em PDF.</p>",
-#     ]
-
-#     for block in blocks:
-#         parts.append(
-#             f"<h3 style='margin:20px 0 8px 0; color:#111111;'>{block.title}</h3>"
-#         )
-
-#         # Caso especial: bloco com um único cartão
-#         if len(block.cards) == 1:
-#             card = block.cards[0]
-#             parts.append(
-#                 f"""
-#                 <table style="border-collapse:collapse; width:100%; max-width:900px; margin-bottom:18px;">
-#                   <tr>
-#                     <th style="border:1px solid #cfcfcf; padding:8px; background:#666666; color:#ffffff; text-align:center;">
-#                       {card.label}
-#                     </th>
-#                   </tr>
-#                   <tr>
-#                     <td style="
-#                         border:1px solid #cfcfcf;
-#                         padding:18px 10px;
-#                         text-align:center;
-#                         background:{card.bg_color};
-#                         color:{card.text_color};
-#                         font-size:18px;
-#                         font-weight:bold;
-#                     ">
-#                         {card.value}
-#                     </td>
-#                   </tr>
-#                 </table>
-#                 """
-#             )
-#             continue
-
-#         # Blocos normais com 4 cartões
-#         parts.append(
-#             """
-#             <table style="border-collapse:collapse; width:100%; max-width:900px; margin-bottom:18px;">
-#               <tr>
-#                 <th style="border:1px solid #cfcfcf; padding:8px; background:#e9e9ef; text-align:center;">T1(08-16)</th>
-#                 <th style="border:1px solid #cfcfcf; padding:8px; background:#e9e9ef; text-align:center;">T2(16-24)</th>
-#                 <th style="border:1px solid #cfcfcf; padding:8px; background:#e9e9ef; text-align:center;">T3(00-08)</th>
-#                 <th style="border:1px solid #cfcfcf; padding:8px; background:#666666; color:#ffffff; text-align:center;">TOTAL</th>
-#               </tr>
-#               <tr>
-#             """
-#         )
-
-#         for card in block.cards:
-#             parts.append(
-#                 f"""
-#                 <td style="
-#                     border:1px solid #cfcfcf;
-#                     padding:14px 10px;
-#                     text-align:center;
-#                     background:{card.bg_color};
-#                     color:{card.text_color};
-#                     font-size:16px;
-#                     font-weight:bold;
-#                 ">
-#                     <div style="font-size:12px; font-weight:normal; margin-bottom:8px;">{card.label}</div>
-#                     <div>{card.value}</div>
-#                 </td>
-#                 """
-#             )
-
-#         parts.append("</tr></table>")
-
-#     parts.append("</body></html>")
-#     return "".join(parts)
-
 def render_email_html(report_date: datetime, sections: list[ReportSection]) -> str:
     parts = [
         "<html><head><meta charset='UTF-8'></head>",
@@ -603,6 +553,17 @@ def render_email_html(report_date: datetime, sections: list[ReportSection]) -> s
 
                     parts.append("<tr>")
                     for header in block.headers:
+                        bg = "#666666" if is_total else "#d9d9e3"
+                        fg = "#ffffff" if is_total else "#111111"
+
+                        if not is_total and "_styles" in row and header in row["_styles"]:
+                            if row["_styles"][header] == "ok":
+                                bg = "#73bf69"
+                                fg = "#ffffff"
+                            elif row["_styles"][header] == "bad":
+                                bg = "#f2495c"
+                                fg = "#ffffff"
+
                         parts.append(
                             f"""
                             <td style="
