@@ -31,6 +31,7 @@ from queries import (
     QUERY_TRIT_TOTAL_SILOS_8H,
     QUERY_DESINF_TRIT_KGS_SILOS_DIA_ANTERIOR,
     QUERY_DESINF_TRIT_TOTAL_SILOS_8H,
+    QUERY_CALIB_GRANULADO_DIA_ANTERIOR,
 )
 
 # Configuração base do projeto
@@ -76,21 +77,25 @@ class MetricBlock:
     cards: list[MetricCard]
 
 @dataclass
+class ReportTableBlock:
+    """
+    Modelo para tabelas com várias linhas
+    """
+    key: str
+    title: str
+    headers: list[str]
+    rows: list[dict[str, object]]
+
+@dataclass
 class ReportSection:
     """
     Uma secção agrupa vários blocos visuais.
-    Exemplo:
-     - Secção "Trituração"
-       - Tempo Produção MD
-       - Horas Trabalhadas
-       - Kgs Produzidos
-       - OEE
-     - Secção "Desinfeção Trituração"
-       - Kgs Produzidos Silos 6 a 10
-       - Total Silos PD às 8h
+    Pode conter:
+    - MetricBlock: blocos de cartões
+    - ReportTableBlock: tabelas com várias linhas
     """
     title:str
-    blocks: list[MetricBlock]
+    blocks: list[MetricBlock | ReportTableBlock]
 
 # Regras visuais / cores
 def get_oee_colors(value: float) -> tuple[str, str]:
@@ -201,6 +206,21 @@ def run_single_row_query(query: str, params: dict | None = None) -> dict[str, ob
     ordered_labels = ["T1(08-16)", "T2(16-24)", "T3(00-08)", "TOTAL"]
     return {label: row.get(label) for label in ordered_labels if label in row}
 
+# Execução genérica de queries com várias linhas
+def run_multi_row_query(query: str, params: dict | None = None) -> list[dict[str, object]]:
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            if params:
+                cur.execute(query, params)
+            else:
+                cur.execute(query)
+            rows = cur.fetchall()
+
+    if not rows:
+        raise RuntimeError("A query multi-linha não devolveu resultados.")
+
+    return [dict(row) for row in rows]
+
 # Construção dos blocos do relatório
 def build_standard_block(key: str, title: str, values: dict[str, object]) -> MetricBlock:
     """
@@ -250,6 +270,36 @@ def build_kg_block(key: str, title: str, values: dict[str, object]) -> MetricBlo
         key=key,
         title=title,
         cards=cards,
+    )
+
+# Builder da tabela de Calibração
+def build_calibracao_granulado_block(rows: list[dict[str, object]]) -> ReportTableBlock:
+    formatted_rows: list[dict[str, object]] = []
+
+    for row in rows:
+        produto = str(row.get("produto", ""))
+
+        formatted_rows.append({
+            "Produto": produto,
+            "T1 (06-14)": format_kg(row.get("T1 (06-14)", 0)),
+            "T2 (14-22)": format_kg(row.get("T2 (14-22)", 0)),
+            "T3 (22-06)": format_kg(row.get("T3 (22-06)", 0)),
+            "Total (Kg)": format_kg(row.get("Total (Kg)", 0)),
+            "%": "" if produto == "Total" else format_pct(row.get("%", 0)),
+        })
+
+    return ReportTableBlock(
+        key="calibracao_granulado_dia_anterior",
+        title="Total de Granulado Produzido - Dia Anterior",
+        headers=[
+            "Produto",
+            "T1 (06-14)",
+            "T2 (14-22)",
+            "T3 (22-06)",
+            "Total (Kg)",
+            "%",
+        ],
+        rows=formatted_rows,
     )
 
 def run_scalar_query(query: str, params: dict | None = None) -> object:
@@ -393,6 +443,14 @@ def get_daily_sections() -> list[ReportSection]:
         ),
     ]
 
+    calibracao_rows = run_multi_row_query(
+        QUERY_CALIB_GRANULADO_DIA_ANTERIOR
+    )
+
+    calibracao_blocks = [
+        build_calibracao_granulado_block(calibracao_rows),
+    ]
+
     # Resultado final
     # O template HTML vai receber esta lista de secções e renderizar
 
@@ -404,6 +462,10 @@ def get_daily_sections() -> list[ReportSection]:
         ReportSection(
             title=f"Desinfeção Trituração ({report_date_label})",
             blocks=desinf_blocks,
+        ),
+        ReportSection(
+            title=f"Calibração ({report_date_label})",
+            blocks=calibracao_blocks,
         ),
     ]
 
@@ -513,6 +575,53 @@ def render_email_html(report_date: datetime, sections: list[ReportSection]) -> s
             parts.append(
                 f"<h4 style='margin:18px 0 8px 0; color:#111111;'>{block.title}</h4>"
             )
+
+            # Caso especial: bloco do tipo tabela
+            if hasattr(block, "rows"):
+                parts.append(
+                    """
+                    <table style="border-collapse:collapse; width:100%; max-width:900px; margin-bottom:18px;">
+                      <tr>
+                    """
+                )
+
+                for header in block.headers:
+                    parts.append(
+                        f"""
+                        <th style="border:1px solid #cfcfcf; padding:8px; background:#e9e9ef; text-align:center;">
+                            {header}
+                        </th>
+                        """
+                    )
+
+                parts.append("</tr>")
+
+                for row in block.rows:
+                    is_total = row.get("Produto") == "Total"
+                    bg = "#666666" if is_total else "#d9d9e3"
+                    fg = "#ffffff" if is_total else "#111111"
+
+                    parts.append("<tr>")
+                    for header in block.headers:
+                        parts.append(
+                            f"""
+                            <td style="
+                                border:1px solid #cfcfcf;
+                                padding:10px;
+                                text-align:center;
+                                background:{bg};
+                                color:{fg};
+                                font-size:14px;
+                                font-weight:bold;
+                            ">
+                                {row.get(header, "")}
+                            </td>
+                            """
+                        )
+                    parts.append("</tr>")
+
+                parts.append("</table>")
+                continue
 
             # Caso especial: bloco com um único cartão
             if len(block.cards) == 1:

@@ -651,3 +651,142 @@ FROM (
     ORDER BY silo_id, created_at DESC
 ) t;
 """
+QUERY_CALIB_GRANULADO_DIA_ANTERIOR = """
+WITH
+now_ctx AS (
+  SELECT
+    now() AS now_ts,
+    (now() AT TIME ZONE 'Europe/Lisbon')::timestamp AS now_local
+),
+base AS (
+  SELECT
+    CASE
+      WHEN EXTRACT(ISODOW FROM now_local) = 1
+        THEN (date_trunc('day', now_local) - interval '3 day')::timestamp
+      ELSE (date_trunc('day', now_local) - interval '1 day')::timestamp
+    END AS day_ref_local
+  FROM now_ctx
+),
+shift_def AS (
+  SELECT * FROM (VALUES
+    (1, 'T1 (06-14)', interval '6 hours',  interval '14 hours'),
+    (2, 'T2 (14-22)', interval '14 hours', interval '22 hours'),
+    (3, 'T3 (22-06)', interval '22 hours', interval '30 hours')
+  ) v(turno_id, turno, start_off, end_off)
+),
+shifts AS (
+  SELECT
+    sd.turno_id,
+    sd.turno,
+    ((b.day_ref_local + sd.start_off) AT TIME ZONE 'Europe/Lisbon') AS start_ts,
+    ((b.day_ref_local + sd.end_off)   AT TIME ZONE 'Europe/Lisbon') AS end_ts
+  FROM base b
+  CROSS JOIN shift_def sd
+),
+products AS (
+  SELECT * FROM (VALUES
+    ('05A1', '05_1'),
+    ('1A2',  '1_2'),
+    ('2A3',  '2_3'),
+    ('3A7',  '3_7')
+  ) p(produto_label, col_name)
+),
+calc AS (
+  SELECT
+    p.produto_label AS produto,
+    p.col_name,
+    s.turno_id,
+    s.turno,
+    GREATEST(
+      COALESCE((
+        SELECT
+          CASE p.col_name
+            WHEN '05_1' THEN g."05_1"
+            WHEN '1_2'  THEN g."1_2"
+            WHEN '2_3'  THEN g."2_3"
+            WHEN '3_7'  THEN g."3_7"
+          END::numeric
+        FROM calibracao.granulados g
+        WHERE g.created_at <= s.end_ts
+        ORDER BY g.created_at DESC
+        LIMIT 1
+      ), 0)
+      -
+      COALESCE((
+        SELECT
+          CASE p.col_name
+            WHEN '05_1' THEN g."05_1"
+            WHEN '1_2'  THEN g."1_2"
+            WHEN '2_3'  THEN g."2_3"
+            WHEN '3_7'  THEN g."3_7"
+          END::numeric
+        FROM calibracao.granulados g
+        WHERE g.created_at <= s.start_ts
+        ORDER BY g.created_at DESC
+        LIMIT 1
+      ), 0),
+      0
+    ) AS kg_turno
+  FROM shifts s
+  CROSS JOIN products p
+),
+pivot_prod AS (
+  SELECT
+    produto,
+    COALESCE(SUM(kg_turno) FILTER (WHERE turno_id = 1), 0) AS t1,
+    COALESCE(SUM(kg_turno) FILTER (WHERE turno_id = 2), 0) AS t2,
+    COALESCE(SUM(kg_turno) FILTER (WHERE turno_id = 3), 0) AS t3
+  FROM calc
+  GROUP BY produto
+),
+prod_with_total AS (
+  SELECT
+    produto,
+    t1,
+    t2,
+    t3,
+    (t1 + t2 + t3) AS total_kg
+  FROM pivot_prod
+),
+total_row AS (
+  SELECT
+    'Total' AS produto,
+    SUM(t1) AS t1,
+    SUM(t2) AS t2,
+    SUM(t3) AS t3,
+    SUM(total_kg) AS total_kg
+  FROM prod_with_total
+),
+all_rows AS (
+  SELECT * FROM prod_with_total
+  UNION ALL
+  SELECT * FROM total_row
+),
+grand_total AS (
+  SELECT total_kg
+  FROM total_row
+)
+SELECT
+  produto,
+  ROUND(t1, 0) AS "T1 (06-14)",
+  ROUND(t2, 0) AS "T2 (14-22)",
+  ROUND(t3, 0) AS "T3 (22-06)",
+  ROUND(total_kg, 0) AS "Total (Kg)",
+  CASE
+    WHEN produto = 'Total' THEN NULL
+    ELSE COALESCE(
+      ROUND(100.0 * total_kg / NULLIF((SELECT total_kg FROM grand_total), 0)),
+      0
+    )
+  END AS "%"
+FROM all_rows
+ORDER BY
+  CASE produto
+    WHEN '05A1' THEN 1
+    WHEN '1A2' THEN 2
+    WHEN '2A3' THEN 3
+    WHEN '3A7' THEN 4
+    WHEN 'Total' THEN 5
+    ELSE 99
+  END;
+"""
