@@ -28,7 +28,9 @@ from queries import (
     QUERY_HORAS_MOINHOS,
     QUERY_KGS_SILOS,
     QUERY_OEE,
-    QUERY_TOTAL_SILOS_8H,
+    QUERY_TRIT_TOTAL_SILOS_8H,
+    QUERY_DESINF_TRIT_KGS_SILOS_DIA_ANTERIOR,
+    QUERY_DESINF_TRIT_TOTAL_SILOS_8H,
 )
 
 # Configuração base do projeto
@@ -73,6 +75,23 @@ class MetricBlock:
     title: str
     cards: list[MetricCard]
 
+@dataclass
+class ReportSection:
+    """
+    Uma secção agrupa vários blocos visuais.
+    Exemplo:
+     - Secção "Trituração"
+       - Tempo Produção MD
+       - Horas Trabalhadas
+       - Kgs Produzidos
+       - OEE
+     - Secção "Desinfeção Trituração"
+       - Kgs Produzidos Silos 6 a 10
+       - Total Silos PD às 8h
+    """
+    title:str
+    blocks: list[MetricBlock]
+
 # Regras visuais / cores
 def get_oee_colors(value: float) -> tuple[str, str]:
     """
@@ -89,7 +108,6 @@ def get_oee_colors(value: float) -> tuple[str, str]:
     if value < 80:
         return "#eab839", "#111111"
     return "#73bf69", "#ffffff"
-
 
 def default_card_style(is_total: bool) -> tuple[str, str]:
     """
@@ -299,84 +317,35 @@ def build_oee_block(values: dict[str, object]) -> MetricBlock:
         cards=cards,
     )
 
-def get_daily_blocks() -> list[MetricBlock]:
-    """
-    Vai buscar os dados do report diário e transforma cada query
-    num bloco visual do relatório.
+# Construção das secções do relatório diário
+# Esta função é responsável por:
+# 1) Executar as queries reais
+# 2) Separar os blocos por secção
+# 3) Devolver uma estrutura organizada para o PDF e para o e-mail
 
-    Se USE_MOCK_DATA=true, usa dados fictícios para testes.
-    Caso contrário, executa as queries reais da base de dados.
-    """
+# A partir daqui, o relatório deixa de ser uma lista única de blocos
+# e passa a estar organizado por secções:
+# - Trituração
+# - Desinfeção Trituração
+def get_daily_sections() -> list[ReportSection]:
     today_label = get_today_local_date()
-    use_mock = os.environ.get("USE_MOCK_DATA", "false").lower() == "true"
+    report_date_label = get_report_date().strftime("%d/%m/%Y")
+    # Secção: Trituração
+    # Dados referentes ao dia anterior:
+    # - Tempo Produção MD
+    # - Nº Horas Trabalhadas Moinhos
+    # - Kgs Produzidos Silos 1 a 5
+    # - OEE
+    # Dados referentes ao dia atual às 08h:
+    # - Total Silos AD 1 a 5
 
-    if use_mock:
-        return [
-            build_single_total_block(
-            f"Total Silos AD 1 a 5 às 8h ({today_label})",
-            11864,
-            " kg",
-            ),
-            build_standard_block(
-                "tempo_producao_md",
-                "Dia Anterior - Tempo Produção MD",
-                {
-                    "T1(08-16)": "05h33 (49%)",
-                    "T2(16-24)": "00h45 (36%)",
-                    "T3(00-08)": "05h05 (28%)",
-                    "TOTAL": "11h24 (39%)",
-                },
-            ),
-            build_standard_block(
-                "tempo_producao_md",
-                "Dia Anterior - Tempo Produção MD",
-                {
-                    "T1(08-16)": "05h33 (49%)",
-                    "T2(16-24)": "00h45 (36%)",
-                    "T3(00-08)": "05h05 (28%)",
-                    "TOTAL": "11h24 (39%)",
-                },
-            ),
-            build_standard_block(
-                "horas_moinhos",
-                "Dia Anterior - Nº Horas Trabalhadas (Moinhos)",
-                {
-                    "T1(08-16)": "07h44",
-                    "T2(16-24)": "02h30",
-                    "T3(00-08)": "06h35",
-                    "TOTAL": "16h51",
-                },
-            ),
-            build_standard_block(
-                "kgs_silos",
-                "Dia Anterior - Kgs Produzidos (Silos 1 a 5)",
-                {
-                    "T1(08-16)": "11496 kg",
-                    "T2(16-24)": "3558 kg",
-                    "T3(00-08)": "10572 kg",
-                    "TOTAL": "25626 kg",
-                },
-            ),
-            build_oee_block(
-                {
-                    "T1(08-16)": 99.1,
-                    "T2(16-24)": 30.7,
-                    "T3(00-08)": 91.1,
-                    "TOTAL": 73.6,
-                }
-            ),
-        ]
-
-    # Executa as queries reais e monta os blocos
-    today_label = get_today_local_date()
-
-    total_silos_8h = run_scalar_query(QUERY_TOTAL_SILOS_8H)
+    total_silos_8h = run_scalar_query(QUERY_TRIT_TOTAL_SILOS_8H)
     tempo_values = run_single_row_query(QUERY_TEMPO_PRODUCAO_MD)
     horas_values = run_single_row_query(QUERY_HORAS_MOINHOS)
     kgs_values = run_single_row_query(QUERY_KGS_SILOS)
     oee_values = run_single_row_query(QUERY_OEE)
 
-    return [
+    trituracao_blocks = [
         build_standard_block(
             "tempo_producao_md",
             "Dia Anterior - Tempo Produção MD",
@@ -387,11 +356,6 @@ def get_daily_blocks() -> list[MetricBlock]:
             "Dia Anterior - Nº Horas Trabalhadas (Moinhos)",
             horas_values,
         ),
-        # build_standard_block(
-        #     "kgs_silos",
-        #     "Dia Anterior - Kgs Produzidos (Silos)",
-        #     kgs_values,
-        # ),
         build_kg_block(
             "kgs_silos",
             "Dia Anterior - Kgs Produzidos (Silos 1 a 5)",
@@ -400,102 +364,224 @@ def get_daily_blocks() -> list[MetricBlock]:
         build_oee_block(oee_values),
         build_single_total_block(
             f"Total Silos AD 1 a 5 às 8h ({today_label})",
-            #round(float(total_silos_8h), 0),
             total_silos_8h,
-            " kg",
+        ),
+    ]
+
+    # Secção: Desinfeção Trituração
+    # Dados referentes ao dia anterior:
+    # - Kgs Produzidos Silos 6 a 10
+    # Dados referentes ao dia atual às 08h:
+    # - Total Silos PD 6 a 10
+
+    desinf_kgs_values = run_single_row_query(
+        QUERY_DESINF_TRIT_KGS_SILOS_DIA_ANTERIOR
+    )
+    desinf_total_silos_8h = run_scalar_query(
+        QUERY_DESINF_TRIT_TOTAL_SILOS_8H
+    )
+
+    desinf_blocks = [
+        build_kg_block(
+            "desinf_kgs_silos",
+            "Dia Anterior - Kgs Produzidos (Silos 6 a 10)",
+            desinf_kgs_values,
+        ),
+        build_single_total_block(
+            f"Total Silos PD 6 a 10 às 8h ({today_label})",
+            desinf_total_silos_8h,
+        ),
+    ]
+
+    # Resultado final
+    # O template HTML vai receber esta lista de secções e renderizar
+
+    return [
+        ReportSection(
+            title=f"Trituração ({report_date_label})",
+            blocks=trituracao_blocks,
+        ),
+        ReportSection(
+            title=f"Desinfeção Trituração ({report_date_label})",
+            blocks=desinf_blocks,
         ),
     ]
 
 # Renderização HTML para e-mail
-def render_email_html(report_date: datetime, blocks: list[MetricBlock]) -> str:
-    """
-    Gera o HTML do corpo do e-mail num formato simples e estável,
-    mais adequado para Outlook e outros clientes de e-mail.
+# def render_email_html(report_date: datetime, blocks: list[MetricBlock]) -> str:
+#     """
+#     Gera o HTML do corpo do e-mail num formato simples e estável,
+#     mais adequado para Outlook e outros clientes de e-mail.
 
-    Este HTML é separado do HTML do PDF:
-    - e-mail -> simples, tabelas clássicas
-    - PDF    -> layout tipo dashboard
-    """
+#     Este HTML é separado do HTML do PDF:
+#     - e-mail -> simples, tabelas clássicas
+#     - PDF    -> layout tipo dashboard
+#     """
+#     parts = [
+#         "<html><head><meta charset='UTF-8'></head>",
+#         "<body style='font-family: Arial, sans-serif; color:#111111; background:#ffffff;'>",
+#         f"<h2 style='margin-bottom:8px;'>Relatório Diário - Trituração - {report_date.strftime('%d/%m/%Y')}</h2>",
+#         "<p style='margin-top:0;'>Segue em anexo o relatório diário em PDF.</p>",
+#     ]
+
+#     for block in blocks:
+#         parts.append(
+#             f"<h3 style='margin:20px 0 8px 0; color:#111111;'>{block.title}</h3>"
+#         )
+
+#         # Caso especial: bloco com um único cartão
+#         if len(block.cards) == 1:
+#             card = block.cards[0]
+#             parts.append(
+#                 f"""
+#                 <table style="border-collapse:collapse; width:100%; max-width:900px; margin-bottom:18px;">
+#                   <tr>
+#                     <th style="border:1px solid #cfcfcf; padding:8px; background:#666666; color:#ffffff; text-align:center;">
+#                       {card.label}
+#                     </th>
+#                   </tr>
+#                   <tr>
+#                     <td style="
+#                         border:1px solid #cfcfcf;
+#                         padding:18px 10px;
+#                         text-align:center;
+#                         background:{card.bg_color};
+#                         color:{card.text_color};
+#                         font-size:18px;
+#                         font-weight:bold;
+#                     ">
+#                         {card.value}
+#                     </td>
+#                   </tr>
+#                 </table>
+#                 """
+#             )
+#             continue
+
+#         # Blocos normais com 4 cartões
+#         parts.append(
+#             """
+#             <table style="border-collapse:collapse; width:100%; max-width:900px; margin-bottom:18px;">
+#               <tr>
+#                 <th style="border:1px solid #cfcfcf; padding:8px; background:#e9e9ef; text-align:center;">T1(08-16)</th>
+#                 <th style="border:1px solid #cfcfcf; padding:8px; background:#e9e9ef; text-align:center;">T2(16-24)</th>
+#                 <th style="border:1px solid #cfcfcf; padding:8px; background:#e9e9ef; text-align:center;">T3(00-08)</th>
+#                 <th style="border:1px solid #cfcfcf; padding:8px; background:#666666; color:#ffffff; text-align:center;">TOTAL</th>
+#               </tr>
+#               <tr>
+#             """
+#         )
+
+#         for card in block.cards:
+#             parts.append(
+#                 f"""
+#                 <td style="
+#                     border:1px solid #cfcfcf;
+#                     padding:14px 10px;
+#                     text-align:center;
+#                     background:{card.bg_color};
+#                     color:{card.text_color};
+#                     font-size:16px;
+#                     font-weight:bold;
+#                 ">
+#                     <div style="font-size:12px; font-weight:normal; margin-bottom:8px;">{card.label}</div>
+#                     <div>{card.value}</div>
+#                 </td>
+#                 """
+#             )
+
+#         parts.append("</tr></table>")
+
+#     parts.append("</body></html>")
+#     return "".join(parts)
+
+def render_email_html(report_date: datetime, sections: list[ReportSection]) -> str:
     parts = [
         "<html><head><meta charset='UTF-8'></head>",
         "<body style='font-family: Arial, sans-serif; color:#111111; background:#ffffff;'>",
-        f"<h2 style='margin-bottom:8px;'>Relatório Diário - Trituração - {report_date.strftime('%d/%m/%Y')}</h2>",
+        f"<h2 style='margin-bottom:8px;'>Relatório Diário - {report_date.strftime('%d/%m/%Y')}</h2>",
         "<p style='margin-top:0;'>Segue em anexo o relatório diário em PDF.</p>",
     ]
 
-    for block in blocks:
+    for section in sections:
         parts.append(
-            f"<h3 style='margin:20px 0 8px 0; color:#111111;'>{block.title}</h3>"
+            f"<h3 style='margin:24px 0 10px 0; color:#111111; border-bottom:2px solid #d0d0d0; padding-bottom:6px;'>"
+            f"{section.title}</h3>"
         )
 
-        # Caso especial: bloco com um único cartão
-        if len(block.cards) == 1:
-            card = block.cards[0]
+        for block in section.blocks:
             parts.append(
-                f"""
+                f"<h4 style='margin:18px 0 8px 0; color:#111111;'>{block.title}</h4>"
+            )
+
+            # Caso especial: bloco com um único cartão
+            if len(block.cards) == 1:
+                card = block.cards[0]
+                parts.append(
+                    f"""
+                    <table style="border-collapse:collapse; width:100%; max-width:900px; margin-bottom:18px;">
+                      <tr>
+                        <th style="border:1px solid #cfcfcf; padding:8px; background:#666666; color:#ffffff; text-align:center;">
+                          {card.label}
+                        </th>
+                      </tr>
+                      <tr>
+                        <td style="
+                            border:1px solid #cfcfcf;
+                            padding:18px 10px;
+                            text-align:center;
+                            background:{card.bg_color};
+                            color:{card.text_color};
+                            font-size:18px;
+                            font-weight:bold;
+                        ">
+                            {card.value}
+                        </td>
+                      </tr>
+                    </table>
+                    """
+                )
+                continue
+
+            # Blocos normais com T1, T2, T3 e TOTAL
+            parts.append(
+                """
                 <table style="border-collapse:collapse; width:100%; max-width:900px; margin-bottom:18px;">
                   <tr>
-                    <th style="border:1px solid #cfcfcf; padding:8px; background:#666666; color:#ffffff; text-align:center;">
-                      {card.label}
-                    </th>
+                    <th style="border:1px solid #cfcfcf; padding:8px; background:#e9e9ef; text-align:center;">T1(08-16)</th>
+                    <th style="border:1px solid #cfcfcf; padding:8px; background:#e9e9ef; text-align:center;">T2(16-24)</th>
+                    <th style="border:1px solid #cfcfcf; padding:8px; background:#e9e9ef; text-align:center;">T3(00-08)</th>
+                    <th style="border:1px solid #cfcfcf; padding:8px; background:#666666; color:#ffffff; text-align:center;">TOTAL</th>
                   </tr>
                   <tr>
+                """
+            )
+
+            for card in block.cards:
+                parts.append(
+                    f"""
                     <td style="
                         border:1px solid #cfcfcf;
-                        padding:18px 10px;
+                        padding:14px 10px;
                         text-align:center;
                         background:{card.bg_color};
                         color:{card.text_color};
-                        font-size:18px;
+                        font-size:16px;
                         font-weight:bold;
                     ">
-                        {card.value}
+                        <div style="font-size:12px; font-weight:normal; margin-bottom:8px;">{card.label}</div>
+                        <div>{card.value}</div>
                     </td>
-                  </tr>
-                </table>
-                """
-            )
-            continue
+                    """
+                )
 
-        # Blocos normais com 4 cartões
-        parts.append(
-            """
-            <table style="border-collapse:collapse; width:100%; max-width:900px; margin-bottom:18px;">
-              <tr>
-                <th style="border:1px solid #cfcfcf; padding:8px; background:#e9e9ef; text-align:center;">T1(08-16)</th>
-                <th style="border:1px solid #cfcfcf; padding:8px; background:#e9e9ef; text-align:center;">T2(16-24)</th>
-                <th style="border:1px solid #cfcfcf; padding:8px; background:#e9e9ef; text-align:center;">T3(00-08)</th>
-                <th style="border:1px solid #cfcfcf; padding:8px; background:#666666; color:#ffffff; text-align:center;">TOTAL</th>
-              </tr>
-              <tr>
-            """
-        )
-
-        for card in block.cards:
-            parts.append(
-                f"""
-                <td style="
-                    border:1px solid #cfcfcf;
-                    padding:14px 10px;
-                    text-align:center;
-                    background:{card.bg_color};
-                    color:{card.text_color};
-                    font-size:16px;
-                    font-weight:bold;
-                ">
-                    <div style="font-size:12px; font-weight:normal; margin-bottom:8px;">{card.label}</div>
-                    <div>{card.value}</div>
-                </td>
-                """
-            )
-
-        parts.append("</tr></table>")
+            parts.append("</tr></table>")
 
     parts.append("</body></html>")
     return "".join(parts)
 
 # Renderização HTML
-def render_html(report_date: datetime, blocks: list[MetricBlock]) -> str:
+def render_html(report_date: datetime, sections: list[ReportSection]) -> str:
     """
     Renderiza o HTML final do report com base num template Jinja2.
     O CSS é carregado a partir da pasta static/.
@@ -507,7 +593,8 @@ def render_html(report_date: datetime, blocks: list[MetricBlock]) -> str:
 
     return template.render(
         report_date=report_date.strftime("%d/%m/%Y"),
-        blocks=blocks,
+        #blocks=blocks,
+        sections=sections,
         css_path=css_path,
     )
 
@@ -623,17 +710,21 @@ def main() -> None:
     7) envia por e-mail
     """
     report_date = get_report_date()
-    blocks = get_daily_blocks()
+    #blocks = get_daily_blocks()
+    #Usamse secções, não uma lista única de blocos
+    sections = get_daily_sections()
 
-    pdf_html = render_html(report_date, blocks)
-    email_html = render_email_html(report_date, blocks)
+    #pdf_html = render_html(report_date, blocks)
+    pdf_html = render_html(report_date, sections)
+    #email_html = render_email_html(report_date, blocks)
+    email_html = render_email_html(report_date, sections)
 
     debug_html_path = export_debug_html(pdf_html, report_date)
     pdf_path = export_pdf(pdf_html, report_date)
 
     if os.environ.get("SEND_EMAIL", "true").lower() == "true":
         send_email(
-            subject=f"Relatório Diário - Trituração - {report_date.strftime('%d/%m/%Y')}",
+            subject=f"Relatório Diário - {report_date.strftime('%d/%m/%Y')}",
             html_body=email_html,
             text_body=build_plain_text(report_date),
             attachments=[pdf_path],

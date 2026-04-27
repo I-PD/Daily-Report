@@ -96,3 +96,28 @@
     font-weight: bold;
     text-align: center;
   }
+  /* ============================================================
+   Separação visual das secções do relatório
+   ============================================================ */
+
+  .report-section {
+    margin-top: 18px;
+    page-break-inside: avoid;
+  }
+
+  .section-title {
+    font-size: 22px;
+    margin: 18px 0 14px 0;
+    color: #111111;
+  }
+
+  .report-section + .report-section {
+    margin-top: 28px;
+    padding-top: 10px;
+    border-top: 2px solid #d0d0d0;
+  }
+
+  /* Faz blocos com apenas 1 cartão ocuparem a largura inteira */
+  .cards-grid.single-card {
+    grid-template-columns: 1fr;
+  }

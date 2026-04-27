@@ -510,7 +510,7 @@ SELECT
   round(total_oee, 1) AS "TOTAL"
 FROM pivot;
 """
-QUERY_TOTAL_SILOS_8H = """
+QUERY_TRIT_TOTAL_SILOS_8H = """
 WITH ref AS (
     SELECT
         (
@@ -525,6 +525,128 @@ FROM (
         qtd_silo
     FROM trituracao.silos1a5, ref
     WHERE silo_id BETWEEN 1 AND 5
+      AND created_at <= ref.ref_ts
+    ORDER BY silo_id, created_at DESC
+) t;
+"""
+QUERY_DESINF_TRIT_KGS_SILOS_DIA_ANTERIOR = """
+WITH prod AS (
+  WITH
+  now_local AS (
+    SELECT (now() AT TIME ZONE 'Europe/Lisbon')::timestamp AS now_local
+  ),
+  base AS (
+    SELECT
+      date_trunc('day', now_local)::timestamp AS today_local,
+      CASE
+        WHEN EXTRACT(ISODOW FROM now_local) = 1
+          THEN (date_trunc('day', now_local) - interval '3 days')::timestamp   -- 2ª feira => 6ª feira
+        ELSE (date_trunc('day', now_local) - interval '1 day')::timestamp     -- resto => ontem
+      END AS day1_local
+    FROM now_local
+  ),
+  shift_def AS (
+    SELECT * FROM (VALUES
+      (1, '08-16', interval '8 hours', interval '16 hours'),
+      (2, '16-24', interval '16 hours', interval '24 hours'),
+      (3, '00-08', interval '24 hours',  interval '32 hours')
+    ) v(turno_id, turno, start_off, end_off)
+  ),
+  days AS (
+    SELECT * FROM (
+      VALUES
+        ('Dia',   (SELECT today_local FROM base)),
+        ('Dia-1', (SELECT day1_local  FROM base))
+    ) v(dia_ref, day_local)
+  ),
+  shifts AS (
+    SELECT
+      d.dia_ref,
+      sd.turno_id,
+      sd.turno,
+      (d.day_local + sd.start_off) AT TIME ZONE 'Europe/Lisbon' AS start_ts,
+      (d.day_local + sd.end_off)   AT TIME ZONE 'Europe/Lisbon' AS end_ts
+    FROM days d
+    CROSS JOIN shift_def sd
+  ),
+  in_shift AS (
+    SELECT
+      s.dia_ref, s.turno_id, s.turno,
+      t.silo_id, t.estado_silo, t.qtd_silo, t.created_at
+    FROM shifts s
+    JOIN desinfecao.silos6a10 t
+      ON t.created_at >= s.start_ts
+     AND t.created_at <  s.end_ts
+  ),
+  baseline AS (
+    SELECT
+      s.dia_ref, s.turno_id, s.turno,
+      t.silo_id, t.estado_silo, t.qtd_silo, t.created_at
+    FROM shifts s
+    JOIN LATERAL (
+      SELECT DISTINCT ON (x.silo_id)
+        x.*
+      FROM desinfecao.silos6a10 x
+      WHERE x.created_at < s.start_ts
+        AND x.created_at >= s.start_ts - interval '12 hours'
+      ORDER BY x.silo_id, x.created_at DESC
+    ) t ON true
+  ),
+  samples AS (
+    SELECT * FROM baseline
+    UNION ALL
+    SELECT * FROM in_shift
+  ),
+  deltas AS (
+    SELECT
+      dia_ref, turno_id, turno, silo_id, created_at, estado_silo,
+      qtd_silo::numeric AS qtd_silo,
+      (qtd_silo::numeric - lag(qtd_silo::numeric) OVER (
+        PARTITION BY dia_ref, turno_id, silo_id
+        ORDER BY created_at
+      )) AS delta_kg
+    FROM samples
+  )
+  SELECT
+    dia_ref, turno_id, turno,
+    sum(
+      CASE
+        WHEN estado_silo = 1 AND delta_kg > 0 THEN delta_kg
+        ELSE 0
+      END
+    ) AS kg_produzidos
+  FROM deltas
+  GROUP BY dia_ref, turno_id, turno
+),
+pivot AS (
+  SELECT
+    coalesce(max(kg_produzidos) FILTER (WHERE turno_id=1 AND dia_ref='Dia-1'), 0) AS "T1(08-16)",
+    coalesce(max(kg_produzidos) FILTER (WHERE turno_id=2 AND dia_ref='Dia-1'), 0) AS "T2(16-24)",
+    coalesce(max(kg_produzidos) FILTER (WHERE turno_id=3 AND dia_ref='Dia-1'), 0) AS "T3(00-08)"
+  FROM prod
+)
+SELECT
+  "T1(08-16)",
+  "T2(16-24)",
+  "T3(00-08)",
+  ("T1(08-16)" + "T2(16-24)" + "T3(00-08)") AS "TOTAL"
+FROM pivot;
+"""
+QUERY_DESINF_TRIT_TOTAL_SILOS_8H = """
+WITH ref AS (
+    SELECT
+        (
+            date_trunc('day', now() AT TIME ZONE 'Europe/Lisbon')
+            + interval '8 hours'
+        ) AT TIME ZONE 'Europe/Lisbon' AS ref_ts
+)
+SELECT SUM(qtd_silo) AS "TOTAL"
+FROM (
+    SELECT DISTINCT ON (silo_id)
+        silo_id,
+        qtd_silo
+    FROM desinfecao.silos6a10, ref
+    WHERE silo_id BETWEEN 6 AND 10
       AND created_at <= ref.ref_ts
     ORDER BY silo_id, created_at DESC
 ) t;
