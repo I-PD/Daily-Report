@@ -1,0 +1,7 @@
+services:
+  daily-report:
+    build: .
+    container_name: daily-report
+    env_file:
+      - .env
+    restart: "no"
