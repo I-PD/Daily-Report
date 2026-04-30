@@ -41,15 +41,6 @@
     background: #111827;
   }
   
-  /* .block-title {
-    text-align: center;
-    color: #6aa7ff;
-    font-weight: bold;
-    font-size: 14px;
-    padding: 8px;
-    border-bottom: 1px solid #2b3340;
-    text-transform: uppercase;
-  } */
   .block-title {
     text-align: center;
     color: #1f1f1f;
@@ -173,4 +164,9 @@
   .report-table td.cell-bad {
     background: #f2495c;
     color: #ffffff;
+  }
+
+  .report-table td.cell-warning {
+    background: #eab839;
+    color: #111111;
   }

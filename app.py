@@ -12,10 +12,11 @@ from __future__ import annotations
 import os
 import smtplib
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as dt_time
 from email.message import EmailMessage
 from email.utils import formatdate
 from pathlib import Path
+from calendar_helpers import TZ, is_operational_day, previous_operational_day
 
 from dotenv import load_dotenv
 from jinja2 import Environment, FileSystemLoader
@@ -33,6 +34,10 @@ from queries import (
     QUERY_DESINF_TRIT_TOTAL_SILOS_8H,
     QUERY_CALIB_GRANULADO_DIA_ANTERIOR,
     QUERY_DESINF_VINC_DESINFECOES_DIA_ANTERIOR,
+    QUERY_PERFORMANCE_CALIB,
+    QUERY_DISPONIBILIDADE_CALIB,
+    QUERY_OEE_CALIB,
+    QUERY_TEMPO_SEM_GRANULADO_CALIB,
 )
 
 # Configuração base do projeto
@@ -99,6 +104,35 @@ class ReportSection:
     blocks: list[MetricBlock | ReportTableBlock]
 
 # Regras visuais / cores
+# Cores para OEE Calibração
+def get_oee_calib_style(value: float) -> str:
+    """
+    Thresholds Grafana:
+    - < 70  -> vermelho
+    - >=70  -> amarelo
+    - >=80  -> verde
+    """
+    if value >= 80:
+        return "ok"
+    if value >= 70:
+        return "warning"
+    return "bad"
+
+#Cores para tempo trabalho sem granulado
+def get_tempo_sem_granulado_style(seconds: float) -> str:
+    """
+    Thresholds Grafana:
+    - < 3600s  -> verde
+    - >=3600s  -> amarelo
+    - >=5400s  -> vermelho
+    """
+    if seconds >= 5400:
+        return "bad"
+    if seconds >= 3600:
+        return "warning"
+    return "ok"
+
+# Cores para OEE Trituração
 def get_oee_colors(value: float) -> tuple[str, str]:
     """
     Devolve as cores de fundo e texto para OEE,
@@ -128,20 +162,43 @@ def default_card_style(is_total: bool) -> tuple[str, str]:
 # Regras de data do relatório
 def get_report_date() -> datetime:
     """
-    Define a data de referência do relatório:
-    - se hoje é segunda-feira -> devolve sexta-feira
-    - caso contrário -> devolve ontem
-    """
-    today = datetime.now()
-    if today.weekday() == 0:  # segunda-feira
-        return today - timedelta(days=3)
-    return today - timedelta(days=1)
+    Define a data de referência do relatório.
 
+    Em vez de assumir:
+    - segunda -> sexta
+    - outros dias -> ontem
+
+    passa a procurar o último dia operacional anterior,
+    ignorando:
+    - sábados
+    - domingos
+    - feriados/férias definidos no .env
+    """
+    now = datetime.now(TZ)
+    report_day = previous_operational_day(now)
+
+    return datetime.combine(report_day, dt_time(0, 0), tzinfo=TZ)
+# def get_report_date() -> datetime:
+#     """
+#     Define a data de referência do relatório:
+#     - se hoje é segunda-feira -> devolve sexta-feira
+#     - caso contrário -> devolve ontem
+#     """
+#     today = datetime.now()
+#     if today.weekday() == 0:  # segunda-feira
+#         return today - timedelta(days=3)
+#     return today - timedelta(days=1)
 def get_today_local_date() -> str:
     """
     Devolve a data local de hoje em formato dd/mm/YYYY.
     """
-    return datetime.now().strftime("%d/%m/%Y")
+    return datetime.now(TZ).strftime("%d/%m/%Y")
+
+# def get_today_local_date() -> str:
+#     """
+#     Devolve a data local de hoje em formato dd/mm/YYYY.
+#     """
+#     return datetime.now().strftime("%d/%m/%Y")
 
 # Ligação à base de dados
 def get_db_connection():
@@ -159,6 +216,17 @@ def get_db_connection():
     )
 
 #  Formatação de valores dentro das células
+# Passar de segundos para formato horas:minutos
+def format_seconds_hhmmss(value: object) -> str:
+    """
+    Converte segundos para HH:MM:SS.
+    """
+    seconds = int(round(float(value or 0)))
+    h = seconds // 3600
+    m = (seconds % 3600) // 60
+    s = seconds % 60
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
 def format_kg(value: object) -> str:
     """
     Formata um valor de kg sem casas decimais.
@@ -167,7 +235,6 @@ def format_kg(value: object) -> str:
     if value is None:
         return "0 kg"
     return f"{int(round(float(value)))} kg"
-
 
 def format_pct(value: object) -> str:
     """
@@ -303,6 +370,58 @@ def build_calibracao_granulado_block(rows: list[dict[str, object]]) -> ReportTab
         rows=formatted_rows,
     )
 
+# Builder da tabela OEE Calibração - Dia Anterior
+def build_calibracao_oee_block(
+    performance_values: dict[str, object],
+    disponibilidade_values: dict[str, object],
+    oee_values: dict[str, object],
+    tempo_sem_granulado_values: dict[str, object],
+) -> ReportTableBlock:
+
+    headers = [
+        "Indicador",
+        "T1 (06-14)",
+        "T2 (14-22)",
+        "T3 (22-06)",
+        "Dia",
+    ]
+
+    def build_percent_row(label: str, values: dict[str, object], apply_colors: bool = False):
+        row = {"Indicador": label, "_styles": {}}
+
+        for col in ["T1 (06-14)", "T2 (14-22)", "T3 (22-06)", "Dia"]:
+            value = float(values.get(col, 0) or 0)
+            row[col] = format_pct(value)
+
+            if apply_colors:
+                row["_styles"][col] = get_oee_calib_style(value)
+
+        return row
+
+    def build_time_row(label: str, values: dict[str, object]):
+        row = {"Indicador": label, "_styles": {}}
+
+        for col in ["T1 (06-14)", "T2 (14-22)", "T3 (22-06)", "Dia"]:
+            value = float(values.get(col, 0) or 0)
+            row[col] = format_seconds_hhmmss(value)
+            row["_styles"][col] = get_tempo_sem_granulado_style(value)
+
+        return row
+
+    rows = [
+        build_percent_row("Performance", performance_values),
+        build_percent_row("Disponibilidade", disponibilidade_values),
+        build_percent_row("OEE", oee_values, apply_colors=True),
+        build_time_row("Tempo Trabalho sem granulado", tempo_sem_granulado_values),
+    ]
+
+    return ReportTableBlock(
+        key="calibracao_oee_dia_anterior",
+        title="Cálculo OEE - Dia Anterior",
+        headers=headers,
+        rows=rows,
+    )
+
 # Builder da tabela Desinfeção VINC
 def build_desinf_vinc_desinfecoes_block(rows: list[dict[str, object]]) -> ReportTableBlock:
     formatted_rows: list[dict[str, object]] = []
@@ -427,17 +546,17 @@ def get_daily_sections() -> list[ReportSection]:
     trituracao_blocks = [
         build_standard_block(
             "tempo_producao_md",
-            "Dia Anterior - Tempo Produção MD",
+            "Tempo Produção MD",
             tempo_values,
         ),
         build_standard_block(
             "horas_moinhos",
-            "Dia Anterior - Nº Horas Trabalhadas (Moinhos)",
+            "Nº Horas Trabalhadas (Moinhos)",
             horas_values,
         ),
         build_kg_block(
             "kgs_silos",
-            "Dia Anterior - Kgs Produzidos (Silos 1 a 5)",
+            "Kgs Produzidos (Silos 1 a 5)",
             kgs_values,
         ),
         build_oee_block(oee_values),
@@ -458,7 +577,7 @@ def get_daily_sections() -> list[ReportSection]:
     desinf_blocks = [
         build_kg_block(
             "desinf_kgs_silos",
-            "Dia Anterior - Kgs Produzidos (Silos 6 a 10)",
+            "Kgs Produzidos (Silos 6 a 10)",
             desinf_kgs_values,
         ),
         build_single_total_block(
@@ -472,8 +591,19 @@ def get_daily_sections() -> list[ReportSection]:
         QUERY_CALIB_GRANULADO_DIA_ANTERIOR
     )
 
+    performance_calib_values = run_single_row_query(QUERY_PERFORMANCE_CALIB)
+    disponibilidade_calib_values = run_single_row_query(QUERY_DISPONIBILIDADE_CALIB)
+    oee_calib_values = run_single_row_query(QUERY_OEE_CALIB)
+    tempo_sem_granulado_calib_values = run_single_row_query(QUERY_TEMPO_SEM_GRANULADO_CALIB)
+
     calibracao_blocks = [
         build_calibracao_granulado_block(calibracao_rows),
+         build_calibracao_oee_block(
+            performance_calib_values,
+            disponibilidade_calib_values,
+            oee_calib_values,
+            tempo_sem_granulado_calib_values,
+        ),
     ]
 
     # Secção: Desinfeção VINC
@@ -779,14 +909,17 @@ def main() -> None:
     6) gera PDF
     7) envia por e-mail
     """
+    now = datetime.now(TZ)
+
+    if not is_operational_day(now):
+        print("Dia não operacional. Report não enviado.")
+        return
+
     report_date = get_report_date()
-    #blocks = get_daily_blocks()
-    #Usamse secções, não uma lista única de blocos
+    #Usam-se secções, não uma lista única de blocos
     sections = get_daily_sections()
 
-    #pdf_html = render_html(report_date, blocks)
     pdf_html = render_html(report_date, sections)
-    #email_html = render_email_html(report_date, blocks)
     email_html = render_email_html(report_date, sections)
 
     debug_html_path = export_debug_html(pdf_html, report_date)

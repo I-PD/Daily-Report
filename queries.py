@@ -977,3 +977,652 @@ ORDER BY
     ELSE 99
   END;
 """
+QUERY_PERFORMANCE_CALIB= """
+WITH
+params_oee AS (
+  SELECT 1250 AS cadencia_kg_h
+),
+now_ctx AS (
+  SELECT (now() AT TIME ZONE 'Europe/Lisbon')::timestamp AS now_local
+),
+base AS (
+  SELECT
+    CASE
+      WHEN EXTRACT(ISODOW FROM now_local) = 1
+        THEN (date_trunc('day', now_local) - interval '3 day')::timestamp
+      ELSE (date_trunc('day', now_local) - interval '1 day')::timestamp
+    END AS day_ref_local
+  FROM now_ctx
+),
+shift_def AS (
+  SELECT * FROM (VALUES
+    (1, 'T1', interval '6 hours',  interval '14 hours'),
+    (2, 'T2', interval '14 hours', interval '22 hours'),
+    (3, 'T3', interval '22 hours', interval '30 hours')
+  ) v(turno_id, turno, start_off, end_off)
+),
+shifts AS (
+  SELECT
+    sd.turno_id,
+    sd.turno,
+    ((b.day_ref_local + sd.start_off) AT TIME ZONE 'Europe/Lisbon') AS start_ts,
+    ((b.day_ref_local + sd.end_off)   AT TIME ZONE 'Europe/Lisbon') AS end_ts,
+    28800.0 AS planned_s
+  FROM base b
+  CROSS JOIN shift_def sd
+),
+produced_by_shift AS (
+  SELECT
+    s.turno_id,
+    s.turno,
+    GREATEST(
+      COALESCE((
+        SELECT g.total::numeric
+        FROM calibracao.granulados g
+        WHERE g.created_at <= s.end_ts
+        ORDER BY g.created_at DESC
+        LIMIT 1
+      ), 0)
+      -
+      COALESCE((
+        SELECT g.total::numeric
+        FROM calibracao.granulados g
+        WHERE g.created_at <= s.start_ts
+        ORDER BY g.created_at DESC
+        LIMIT 1
+      ), 0),
+      0
+    ) AS kg_produzidos
+  FROM shifts s
+),
+estado_por_ts AS (
+  SELECT
+    r.created_at,
+    CASE
+      WHEN COALESCE(r.status_rotex_m23, 0) = 1
+        OR COALESCE(r.status_rotex_m45, 0) = 1
+      THEN 1 ELSE 0
+    END AS algum_rotex_on,
+    COALESCE(silos.algum_silo_vazar, 0) AS algum_silo_vazar
+  FROM mov_granulados.remoagem r
+  LEFT JOIN LATERAL (
+    SELECT MAX(CASE WHEN x.estado_silo = 2 THEN 1 ELSE 0 END) AS algum_silo_vazar
+    FROM (
+      SELECT DISTINCT ON (s.silo_id)
+        s.silo_id,
+        s.estado_silo
+      FROM desinfecao.silos6a10 s
+      WHERE s.silo_id BETWEEN 6 AND 10
+        AND s.created_at <= r.created_at
+      ORDER BY s.silo_id, s.created_at DESC
+    ) x
+  ) silos ON true
+),
+status_in_shift AS (
+  SELECT
+    sh.turno_id,
+    sh.turno,
+    sh.end_ts,
+    e.created_at,
+    COALESCE(
+      LEAD(e.created_at) OVER (
+        PARTITION BY sh.turno_id, sh.turno
+        ORDER BY e.created_at
+      ),
+      sh.end_ts
+    ) AS next_ts,
+    e.algum_rotex_on,
+    e.algum_silo_vazar
+  FROM shifts sh
+  JOIN estado_por_ts e
+    ON e.created_at >= sh.start_ts
+   AND e.created_at <  sh.end_ts
+),
+durations AS (
+  SELECT
+    turno_id,
+    turno,
+    EXTRACT(EPOCH FROM GREATEST(interval '0 second', LEAST(next_ts, end_ts) - created_at)) AS dur_s,
+    algum_rotex_on,
+    algum_silo_vazar
+  FROM status_in_shift
+),
+time_by_shift AS (
+  SELECT
+    sh.turno_id,
+    sh.turno,
+    sh.planned_s,
+    COALESCE(SUM(CASE WHEN d.algum_rotex_on = 1 AND d.algum_silo_vazar = 1 THEN d.dur_s ELSE 0 END), 0) AS tempo_produtivo_s,
+    COALESCE(SUM(CASE WHEN d.algum_rotex_on = 1 AND d.algum_silo_vazar = 0 THEN d.dur_s ELSE 0 END), 0) AS tempo_sem_granulado_s
+  FROM shifts sh
+  LEFT JOIN durations d
+    ON d.turno_id = sh.turno_id
+   AND d.turno = sh.turno
+  GROUP BY sh.turno_id, sh.turno, sh.planned_s
+),
+kpis AS (
+  SELECT
+    t.turno_id,
+    t.turno,
+    p.kg_produzidos,
+    t.planned_s,
+    t.tempo_produtivo_s,
+    t.tempo_sem_granulado_s,
+    CASE
+      WHEN t.planned_s > 0
+        THEN 100.0 * GREATEST(t.planned_s - t.tempo_sem_granulado_s, 0) / t.planned_s
+      ELSE 0
+    END AS disponibilidade_pct,
+    CASE
+      WHEN t.tempo_produtivo_s > 0
+        THEN 100.0 * p.kg_produzidos / ((t.tempo_produtivo_s / 3600.0) * po.cadencia_kg_h)
+      ELSE 0
+    END AS performance_pct
+  FROM time_by_shift t
+  JOIN produced_by_shift p
+    ON p.turno_id = t.turno_id
+   AND p.turno = t.turno
+  CROSS JOIN params_oee po
+),
+kpis_day AS (
+  SELECT
+    CASE
+      WHEN SUM(planned_s) > 0
+        THEN 100.0 * GREATEST(SUM(planned_s) - SUM(tempo_sem_granulado_s), 0) / SUM(planned_s)
+      ELSE 0
+    END AS disponibilidade_dia,
+    CASE
+      WHEN SUM(tempo_produtivo_s) > 0
+        THEN 100.0 * SUM(kg_produzidos) / ((SUM(tempo_produtivo_s) / 3600.0) * MAX(po.cadencia_kg_h))
+      ELSE 0
+    END AS performance_dia
+  FROM kpis
+  CROSS JOIN params_oee po
+),
+final_rows AS (
+  SELECT
+    'Performance' AS metric,
+    ROUND(LEAST(100.0, COALESCE(MAX(performance_pct) FILTER (WHERE turno_id = 1), 0)), 1) AS t1,
+    ROUND(LEAST(100.0, COALESCE(MAX(performance_pct) FILTER (WHERE turno_id = 2), 0)), 1) AS t2,
+    ROUND(LEAST(100.0, COALESCE(MAX(performance_pct) FILTER (WHERE turno_id = 3), 0)), 1) AS t3,
+    ROUND(LEAST(100.0, (SELECT performance_dia FROM kpis_day)), 1) AS dia
+  FROM kpis
+)
+SELECT
+  metric,
+  t1 AS "T1 (06-14)",
+  t2 AS "T2 (14-22)",
+  t3 AS "T3 (22-06)",
+  dia AS "Dia"
+FROM final_rows;
+"""
+QUERY_DISPONIBILIDADE_CALIB= """
+WITH
+params_oee AS (
+  SELECT 1250 AS cadencia_kg_h
+),
+now_ctx AS (
+  SELECT (now() AT TIME ZONE 'Europe/Lisbon')::timestamp AS now_local
+),
+base AS (
+  SELECT
+    CASE
+      WHEN EXTRACT(ISODOW FROM now_local) = 1
+        THEN (date_trunc('day', now_local) - interval '3 day')::timestamp
+      ELSE (date_trunc('day', now_local) - interval '1 day')::timestamp
+    END AS day_ref_local
+  FROM now_ctx
+),
+shift_def AS (
+  SELECT * FROM (VALUES
+    (1, 'T1', interval '6 hours',  interval '14 hours'),
+    (2, 'T2', interval '14 hours', interval '22 hours'),
+    (3, 'T3', interval '22 hours', interval '30 hours')
+  ) v(turno_id, turno, start_off, end_off)
+),
+shifts AS (
+  SELECT
+    sd.turno_id,
+    sd.turno,
+    ((b.day_ref_local + sd.start_off) AT TIME ZONE 'Europe/Lisbon') AS start_ts,
+    ((b.day_ref_local + sd.end_off)   AT TIME ZONE 'Europe/Lisbon') AS end_ts,
+    28800.0 AS planned_s
+  FROM base b
+  CROSS JOIN shift_def sd
+),
+produced_by_shift AS (
+  SELECT
+    s.turno_id,
+    s.turno,
+    GREATEST(
+      COALESCE((
+        SELECT g.total::numeric
+        FROM calibracao.granulados g
+        WHERE g.created_at <= s.end_ts
+        ORDER BY g.created_at DESC
+        LIMIT 1
+      ), 0)
+      -
+      COALESCE((
+        SELECT g.total::numeric
+        FROM calibracao.granulados g
+        WHERE g.created_at <= s.start_ts
+        ORDER BY g.created_at DESC
+        LIMIT 1
+      ), 0),
+      0
+    ) AS kg_produzidos
+  FROM shifts s
+),
+estado_por_ts AS (
+  SELECT
+    r.created_at,
+    CASE
+      WHEN COALESCE(r.status_rotex_m23, 0) = 1
+        OR COALESCE(r.status_rotex_m45, 0) = 1
+      THEN 1 ELSE 0
+    END AS algum_rotex_on,
+    COALESCE(silos.algum_silo_vazar, 0) AS algum_silo_vazar
+  FROM mov_granulados.remoagem r
+  LEFT JOIN LATERAL (
+    SELECT MAX(CASE WHEN x.estado_silo = 2 THEN 1 ELSE 0 END) AS algum_silo_vazar
+    FROM (
+      SELECT DISTINCT ON (s.silo_id)
+        s.silo_id,
+        s.estado_silo
+      FROM desinfecao.silos6a10 s
+      WHERE s.silo_id BETWEEN 6 AND 10
+        AND s.created_at <= r.created_at
+      ORDER BY s.silo_id, s.created_at DESC
+    ) x
+  ) silos ON true
+),
+status_in_shift AS (
+  SELECT
+    sh.turno_id,
+    sh.turno,
+    sh.end_ts,
+    e.created_at,
+    COALESCE(
+      LEAD(e.created_at) OVER (
+        PARTITION BY sh.turno_id, sh.turno
+        ORDER BY e.created_at
+      ),
+      sh.end_ts
+    ) AS next_ts,
+    e.algum_rotex_on,
+    e.algum_silo_vazar
+  FROM shifts sh
+  JOIN estado_por_ts e
+    ON e.created_at >= sh.start_ts
+   AND e.created_at <  sh.end_ts
+),
+durations AS (
+  SELECT
+    turno_id,
+    turno,
+    EXTRACT(EPOCH FROM GREATEST(interval '0 second', LEAST(next_ts, end_ts) - created_at)) AS dur_s,
+    algum_rotex_on,
+    algum_silo_vazar
+  FROM status_in_shift
+),
+time_by_shift AS (
+  SELECT
+    sh.turno_id,
+    sh.turno,
+    sh.planned_s,
+    COALESCE(SUM(CASE WHEN d.algum_rotex_on = 1 AND d.algum_silo_vazar = 1 THEN d.dur_s ELSE 0 END), 0) AS tempo_produtivo_s,
+    COALESCE(SUM(CASE WHEN d.algum_rotex_on = 1 AND d.algum_silo_vazar = 0 THEN d.dur_s ELSE 0 END), 0) AS tempo_sem_granulado_s
+  FROM shifts sh
+  LEFT JOIN durations d
+    ON d.turno_id = sh.turno_id
+   AND d.turno = sh.turno
+  GROUP BY sh.turno_id, sh.turno, sh.planned_s
+),
+kpis AS (
+  SELECT
+    t.turno_id,
+    t.turno,
+    p.kg_produzidos,
+    t.planned_s,
+    t.tempo_produtivo_s,
+    t.tempo_sem_granulado_s,
+    CASE
+      WHEN t.planned_s > 0
+        THEN 100.0 * GREATEST(t.planned_s - t.tempo_sem_granulado_s, 0) / t.planned_s
+      ELSE 0
+    END AS disponibilidade_pct,
+    CASE
+      WHEN t.tempo_produtivo_s > 0
+        THEN 100.0 * p.kg_produzidos / ((t.tempo_produtivo_s / 3600.0) * po.cadencia_kg_h)
+      ELSE 0
+    END AS performance_pct
+  FROM time_by_shift t
+  JOIN produced_by_shift p
+    ON p.turno_id = t.turno_id
+   AND p.turno = t.turno
+  CROSS JOIN params_oee po
+),
+kpis_day AS (
+  SELECT
+    CASE
+      WHEN SUM(planned_s) > 0
+        THEN 100.0 * GREATEST(SUM(planned_s) - SUM(tempo_sem_granulado_s), 0) / SUM(planned_s)
+      ELSE 0
+    END AS disponibilidade_dia,
+    CASE
+      WHEN SUM(tempo_produtivo_s) > 0
+        THEN 100.0 * SUM(kg_produzidos) / ((SUM(tempo_produtivo_s) / 3600.0) * MAX(po.cadencia_kg_h))
+      ELSE 0
+    END AS performance_dia
+  FROM kpis
+  CROSS JOIN params_oee po
+),
+final_rows AS (
+  SELECT
+    'Disponibilidade' AS metric,
+    ROUND(LEAST(100.0, COALESCE(MAX(disponibilidade_pct) FILTER (WHERE turno_id = 1), 0)), 1) as t1,
+    ROUND(LEAST(100.0, COALESCE(MAX(disponibilidade_pct) FILTER (WHERE turno_id = 2), 0)), 1) as t2,
+    ROUND(LEAST(100.0, COALESCE(MAX(disponibilidade_pct) FILTER (WHERE turno_id = 3), 0)), 1) as t3,
+    ROUND(LEAST(100.0, (SELECT disponibilidade_dia FROM kpis_day)), 1) as dia
+  FROM kpis
+)
+SELECT
+  metric,
+  t1 AS "T1 (06-14)",
+  t2 AS "T2 (14-22)",
+  t3 AS "T3 (22-06)",
+  dia AS "Dia"
+FROM final_rows;
+"""
+QUERY_OEE_CALIB= """
+WITH
+params_oee AS (
+  SELECT 1250 AS cadencia_kg_h
+),
+now_ctx AS (
+  SELECT (now() AT TIME ZONE 'Europe/Lisbon')::timestamp AS now_local
+),
+base AS (
+  SELECT
+    CASE
+      WHEN EXTRACT(ISODOW FROM now_local) = 1
+        THEN (date_trunc('day', now_local) - interval '3 day')::timestamp
+      ELSE (date_trunc('day', now_local) - interval '1 day')::timestamp
+    END AS day_ref_local
+  FROM now_ctx
+),
+shift_def AS (
+  SELECT * FROM (VALUES
+    (1, 'T1', interval '6 hours',  interval '14 hours'),
+    (2, 'T2', interval '14 hours', interval '22 hours'),
+    (3, 'T3', interval '22 hours', interval '30 hours')
+  ) v(turno_id, turno, start_off, end_off)
+),
+shifts AS (
+  SELECT
+    sd.turno_id,
+    sd.turno,
+    ((b.day_ref_local + sd.start_off) AT TIME ZONE 'Europe/Lisbon') AS start_ts,
+    ((b.day_ref_local + sd.end_off)   AT TIME ZONE 'Europe/Lisbon') AS end_ts,
+    28800.0 AS planned_s
+  FROM base b
+  CROSS JOIN shift_def sd
+),
+produced_by_shift AS (
+  SELECT
+    s.turno_id,
+    s.turno,
+    GREATEST(
+      COALESCE((
+        SELECT g.total::numeric
+        FROM calibracao.granulados g
+        WHERE g.created_at <= s.end_ts
+        ORDER BY g.created_at DESC
+        LIMIT 1
+      ), 0)
+      -
+      COALESCE((
+        SELECT g.total::numeric
+        FROM calibracao.granulados g
+        WHERE g.created_at <= s.start_ts
+        ORDER BY g.created_at DESC
+        LIMIT 1
+      ), 0),
+      0
+    ) AS kg_produzidos
+  FROM shifts s
+),
+estado_por_ts AS (
+  SELECT
+    r.created_at,
+    CASE
+      WHEN COALESCE(r.status_rotex_m23, 0) = 1
+        OR COALESCE(r.status_rotex_m45, 0) = 1
+      THEN 1 ELSE 0
+    END AS algum_rotex_on,
+    COALESCE(silos.algum_silo_vazar, 0) AS algum_silo_vazar
+  FROM mov_granulados.remoagem r
+  LEFT JOIN LATERAL (
+    SELECT MAX(CASE WHEN x.estado_silo = 2 THEN 1 ELSE 0 END) AS algum_silo_vazar
+    FROM (
+      SELECT DISTINCT ON (s.silo_id)
+        s.silo_id,
+        s.estado_silo
+      FROM desinfecao.silos6a10 s
+      WHERE s.silo_id BETWEEN 6 AND 10
+        AND s.created_at <= r.created_at
+      ORDER BY s.silo_id, s.created_at DESC
+    ) x
+  ) silos ON true
+),
+status_in_shift AS (
+  SELECT
+    sh.turno_id,
+    sh.turno,
+    sh.end_ts,
+    e.created_at,
+    COALESCE(
+      LEAD(e.created_at) OVER (
+        PARTITION BY sh.turno_id, sh.turno
+        ORDER BY e.created_at
+      ),
+      sh.end_ts
+    ) AS next_ts,
+    e.algum_rotex_on,
+    e.algum_silo_vazar
+  FROM shifts sh
+  JOIN estado_por_ts e
+    ON e.created_at >= sh.start_ts
+   AND e.created_at <  sh.end_ts
+),
+durations AS (
+  SELECT
+    turno_id,
+    turno,
+    EXTRACT(EPOCH FROM GREATEST(interval '0 second', LEAST(next_ts, end_ts) - created_at)) AS dur_s,
+    algum_rotex_on,
+    algum_silo_vazar
+  FROM status_in_shift
+),
+time_by_shift AS (
+  SELECT
+    sh.turno_id,
+    sh.turno,
+    sh.planned_s,
+    COALESCE(SUM(CASE WHEN d.algum_rotex_on = 1 AND d.algum_silo_vazar = 1 THEN d.dur_s ELSE 0 END), 0) AS tempo_produtivo_s,
+    COALESCE(SUM(CASE WHEN d.algum_rotex_on = 1 AND d.algum_silo_vazar = 0 THEN d.dur_s ELSE 0 END), 0) AS tempo_sem_granulado_s
+  FROM shifts sh
+  LEFT JOIN durations d
+    ON d.turno_id = sh.turno_id
+   AND d.turno = sh.turno
+  GROUP BY sh.turno_id, sh.turno, sh.planned_s
+),
+kpis AS (
+  SELECT
+    t.turno_id,
+    t.turno,
+    p.kg_produzidos,
+    t.planned_s,
+    t.tempo_produtivo_s,
+    t.tempo_sem_granulado_s,
+    CASE
+      WHEN t.planned_s > 0
+        THEN 100.0 * GREATEST(t.planned_s - t.tempo_sem_granulado_s, 0) / t.planned_s
+      ELSE 0
+    END AS disponibilidade_pct,
+    CASE
+      WHEN t.tempo_produtivo_s > 0
+        THEN 100.0 * p.kg_produzidos / ((t.tempo_produtivo_s / 3600.0) * po.cadencia_kg_h)
+      ELSE 0
+    END AS performance_pct
+  FROM time_by_shift t
+  JOIN produced_by_shift p
+    ON p.turno_id = t.turno_id
+   AND p.turno = t.turno
+  CROSS JOIN params_oee po
+),
+kpis_day AS (
+  SELECT
+    CASE
+      WHEN SUM(planned_s) > 0
+        THEN 100.0 * GREATEST(SUM(planned_s) - SUM(tempo_sem_granulado_s), 0) / SUM(planned_s)
+      ELSE 0
+    END AS disponibilidade_dia,
+    CASE
+      WHEN SUM(tempo_produtivo_s) > 0
+        THEN 100.0 * SUM(kg_produzidos) / ((SUM(tempo_produtivo_s) / 3600.0) * MAX(po.cadencia_kg_h))
+      ELSE 0
+    END AS performance_dia
+  FROM kpis
+  CROSS JOIN params_oee po
+),
+final_rows AS (
+  SELECT
+    'OEE' AS metric,
+    ROUND(LEAST(100.0, COALESCE(MAX((performance_pct * disponibilidade_pct) / 100.0) FILTER (WHERE turno_id = 1), 0)), 1) as t1,
+    ROUND(LEAST(100.0, COALESCE(MAX((performance_pct * disponibilidade_pct) / 100.0) FILTER (WHERE turno_id = 2), 0)), 1) as t2,
+    ROUND(LEAST(100.0, COALESCE(MAX((performance_pct * disponibilidade_pct) / 100.0) FILTER (WHERE turno_id = 3), 0)), 1) as t3,
+    ROUND(LEAST(100.0, ((SELECT performance_dia FROM kpis_day) * (SELECT disponibilidade_dia FROM kpis_day)) / 100.0), 1) as dia
+  FROM kpis
+)
+SELECT
+  metric,
+  t1 AS "T1 (06-14)",
+  t2 AS "T2 (14-22)",
+  t3 AS "T3 (22-06)",
+  dia AS "Dia"
+FROM final_rows;
+"""
+QUERY_TEMPO_SEM_GRANULADO_CALIB= """
+WITH
+now_ctx AS (
+  SELECT (now() AT TIME ZONE 'Europe/Lisbon')::timestamp AS now_local
+),
+base AS (
+  SELECT
+    CASE
+      WHEN EXTRACT(ISODOW FROM now_local) = 1
+        THEN (date_trunc('day', now_local) - interval '3 day')::timestamp
+      ELSE (date_trunc('day', now_local) - interval '1 day')::timestamp
+    END AS day_ref_local
+  FROM now_ctx
+),
+shift_def AS (
+  SELECT * FROM (VALUES
+    (1, 'T1', interval '6 hours',  interval '14 hours'),
+    (2, 'T2', interval '14 hours', interval '22 hours'),
+    (3, 'T3', interval '22 hours', interval '30 hours')
+  ) v(turno_id, turno, start_off, end_off)
+),
+shifts AS (
+  SELECT
+    sd.turno_id,
+    sd.turno,
+    ((b.day_ref_local + sd.start_off) AT TIME ZONE 'Europe/Lisbon') AS start_ts,
+    ((b.day_ref_local + sd.end_off)   AT TIME ZONE 'Europe/Lisbon') AS end_ts
+  FROM base b
+  CROSS JOIN shift_def sd
+),
+estado_por_ts AS (
+  SELECT
+    r.created_at,
+    CASE
+      WHEN COALESCE(r.status_rotex_m23, 0) = 1
+        OR COALESCE(r.status_rotex_m45, 0) = 1
+      THEN 1 ELSE 0
+    END AS algum_rotex_on,
+    COALESCE(silos.algum_silo_vazar, 0) AS algum_silo_vazar
+  FROM mov_granulados.remoagem r
+  LEFT JOIN LATERAL (
+    SELECT MAX(CASE WHEN x.estado_silo = 2 THEN 1 ELSE 0 END) AS algum_silo_vazar
+    FROM (
+      SELECT DISTINCT ON (s.silo_id)
+        s.silo_id,
+        s.estado_silo
+      FROM desinfecao.silos6a10 s
+      WHERE s.silo_id BETWEEN 6 AND 10
+        AND s.created_at <= r.created_at
+      ORDER BY s.silo_id, s.created_at DESC
+    ) x
+  ) silos ON true
+),
+status_in_shift AS (
+  SELECT
+    sh.turno_id,
+    sh.turno,
+    sh.end_ts,
+    e.created_at,
+    COALESCE(
+      LEAD(e.created_at) OVER (
+        PARTITION BY sh.turno_id, sh.turno
+        ORDER BY e.created_at
+      ),
+      sh.end_ts
+    ) AS next_ts,
+    e.algum_rotex_on,
+    e.algum_silo_vazar
+  FROM shifts sh
+  JOIN estado_por_ts e
+    ON e.created_at >= sh.start_ts
+   AND e.created_at <  sh.end_ts
+),
+durations AS (
+  SELECT
+    turno_id,
+    turno,
+    EXTRACT(EPOCH FROM GREATEST(interval '0 second', LEAST(next_ts, end_ts) - created_at)) AS dur_s,
+    algum_rotex_on,
+    algum_silo_vazar
+  FROM status_in_shift
+),
+tempo_sem_granulado AS (
+  SELECT
+    turno_id,
+    turno,
+    SUM(
+      CASE
+        WHEN algum_rotex_on = 1
+         AND algum_silo_vazar = 0
+        THEN dur_s
+        ELSE 0
+      END
+    ) AS seg_sem_granulado
+  FROM durations
+  GROUP BY turno_id, turno
+),
+agg AS (
+  SELECT
+    COALESCE(MAX(seg_sem_granulado) FILTER (WHERE turno_id = 1), 0) AS t1_s,
+    COALESCE(MAX(seg_sem_granulado) FILTER (WHERE turno_id = 2), 0) AS t2_s,
+    COALESCE(MAX(seg_sem_granulado) FILTER (WHERE turno_id = 3), 0) AS t3_s,
+    COALESCE(SUM(seg_sem_granulado), 0) AS dia_s
+  FROM tempo_sem_granulado
+)
+SELECT
+  t1_s AS "T1 (06-14)",
+  t2_s AS "T2 (14-22)",
+  t3_s AS "T3 (22-06)",
+  dia_s AS "Dia"
+FROM agg;
+"""
