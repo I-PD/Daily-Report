@@ -1,0 +1,145 @@
+<!--  
+# template HTML do report
+# estrutura semelhante às tabelas de Grafana
+
+
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta charset="UTF-8">
+  <title>Relatório Diário Trituração</title>
+  <link rel="stylesheet" href="{{ css_path }}">
+</head>
+<body>
+  <div class="page">
+    <div class="report-header">
+      <h1>Relatório Diário</h1> - Trituração ({{ report_date }})</h1> 
+      <h2> Trituração ({{report_date}}) </h2>
+    </div>
+
+    <div class="blocks-grid">
+      {% for block in blocks %}
+      <section class="metric-block">
+        <div class="block-title">{{ block.title }}</div>
+        <div class="cards-grid {% if block.cards|length == 1 %}single-card{% endif %}">
+          {% for card in block.cards %}
+          <div class="metric-card"
+               style="background-color: {{ card.bg_color }}; color: {{ card.text_color }};">
+            <div class="metric-label">{{ card.label }}</div>
+            <div class="metric-value">{{ card.value }}</div>
+          </div>
+          {% endfor %}
+        </div>
+      </section>
+      {% endfor %}
+    </div>
+  </div>
+</body>
+</html> -->
+
+<!--
+============================================================
+daily_report.html
+============================================================
+Template HTML usado para gerar o PDF.
+
+Este template recebe:
+- report_date: data do relatório
+- sections: lista de secções do relatório
+- css_path: caminho para o ficheiro CSS
+
+Estrutura:
+Relatório Diário
+  Secção 1
+    Bloco 1
+    Bloco 2
+  Secção 2
+    Bloco 1
+    Bloco 2
+============================================================
+-->
+
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta charset="UTF-8">
+  <title>Relatório Diário</title>
+  <link rel="stylesheet" href="{{ css_path }}">
+</head>
+
+<body>
+  <div class="page">
+
+    <!-- Cabeçalho principal do relatório -->
+    <div class="report-header">
+      <h1>Relatório Diário</h1>
+    </div>
+
+    <!-- Secções do relatório: Trituração, Desinfeção Trituração, etc. -->
+    {% for section in sections %}
+      <section class="report-section">
+
+        <!-- Título da secção -->
+        <h2 class="section-title">{{ section.title }}</h2>
+
+        <!-- Blocos/cards da secção -->
+        <div class="blocks-grid">
+          {% for block in section.blocks %}
+        
+            {% if block.rows is defined %}
+        
+              <!-- Bloco do tipo tabela -->
+              <section class="table-block">
+                <div class="block-title">{{ block.title }}</div>
+        
+                <table class="report-table">
+                  <thead>
+                    <tr>
+                      {% for header in block.headers %}
+                        <th>{{ header }}</th>
+                      {% endfor %}
+                    </tr>
+                  </thead>
+        
+                  <tbody>
+                    {% for row in block.rows %}
+                      <tr class="{% if row['Produto'] == 'Total' %}total-row{% endif %}">
+                        {% for header in block.headers %}
+                        <td class="{% if row['_styles'] is defined and header in row['_styles'] %}cell-{{ row['_styles'][header] }}{% endif %}">
+                          {{ row[header] }}
+                        </td>
+                        {% endfor %}
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </section>
+        
+            {% else %}
+        
+              <!-- Bloco do tipo cards -->
+              <section class="metric-block">
+                <div class="block-title">{{ block.title }}</div>
+        
+                <div class="cards-grid {% if block.cards|length == 1 %}single-card{% endif %}">
+                  {% for card in block.cards %}
+                    <div class="metric-card"
+                         style="background-color: {{ card.bg_color }}; color: {{ card.text_color }};">
+                      <div class="metric-label metric-label-subtitle">{{ card.label }}</div>
+                      <div class="metric-value">{{ card.value }}</div>
+                    </div>
+                  {% endfor %}
+                </div>
+              </section>
+        
+            {% endif %}
+        
+          {% endfor %}
+        </div>
+
+      </section>
+    {% endfor %}
+
+  </div>
+</body>
+</html>
