@@ -637,148 +637,161 @@ def get_daily_sections() -> list[ReportSection]:
     ]
 
 # Renderização HTML para e-mail
-def render_email_html(report_date: datetime, sections: list[ReportSection]) -> str:
-    parts = [
-        "<html><head><meta charset='UTF-8'></head>",
-        "<body style='font-family: Arial, sans-serif; color:#111111; background:#ffffff;'>",
-        f"<h2 style='margin-bottom:8px;'>Relatório Diário - {report_date.strftime('%d/%m/%Y')}</h2>",
-        "<p style='margin-top:0;'>Segue em anexo o relatório diário em PDF.</p>",
-    ]
+# def render_email_html(report_date: datetime, sections: list[ReportSection]) -> str:
+#     parts = [
+#         "<html><head><meta charset='UTF-8'></head>",
+#         "<body style='font-family: Arial, sans-serif; color:#111111; background:#ffffff;'>",
+#         f"<h2 style='margin-bottom:8px;'>Relatório Diário - {report_date.strftime('%d/%m/%Y')}</h2>",
+#         "<p style='margin-top:0;'>Segue em anexo o relatório diário em PDF.</p>",
+#     ]
 
-    for section in sections:
-        parts.append(
-            f"<h3 style='margin:24px 0 10px 0; color:#111111; border-bottom:2px solid #d0d0d0; padding-bottom:6px;'>"
-            f"{section.title}</h3>"
-        )
+#     for section in sections:
+#         parts.append(
+#             f"<h3 style='margin:24px 0 10px 0; color:#111111; border-bottom:2px solid #d0d0d0; padding-bottom:6px;'>"
+#             f"{section.title}</h3>"
+#         )
 
-        for block in section.blocks:
-            parts.append(
-                f"<h4 style='margin:18px 0 8px 0; color:#111111;'>{block.title}</h4>"
-            )
+#         for block in section.blocks:
+#             parts.append(
+#                 f"<h4 style='margin:18px 0 8px 0; color:#111111;'>{block.title}</h4>"
+#             )
 
-            # Caso especial: bloco do tipo tabela
-            if hasattr(block, "rows"):
-                parts.append(
-                    """
-                    <table style="border-collapse:collapse; width:100%; max-width:900px; margin-bottom:18px;">
-                      <tr>
-                    """
-                )
+#             # Caso especial: bloco do tipo tabela
+#             if hasattr(block, "rows"):
+#                 parts.append(
+#                     """
+#                     <table style="border-collapse:collapse; width:100%; max-width:900px; margin-bottom:18px;">
+#                       <tr>
+#                     """
+#                 )
 
-                for header in block.headers:
-                    parts.append(
-                        f"""
-                        <th style="border:1px solid #cfcfcf; padding:8px; background:#e9e9ef; text-align:center;">
-                            {header}
-                        </th>
-                        """
-                    )
+#                 for header in block.headers:
+#                     parts.append(
+#                         f"""
+#                         <th style="border:1px solid #cfcfcf; padding:8px; background:#e9e9ef; text-align:center;">
+#                             {header}
+#                         </th>
+#                         """
+#                     )
 
-                parts.append("</tr>")
+#                 parts.append("</tr>")
 
-                for row in block.rows:
-                    is_total = row.get("Produto") == "Total"
-                    bg = "#666666" if is_total else "#d9d9e3"
-                    fg = "#ffffff" if is_total else "#111111"
+#                 for row in block.rows:
+#                     is_total = row.get("Produto") == "Total"
+#                     bg = "#666666" if is_total else "#d9d9e3"
+#                     fg = "#ffffff" if is_total else "#111111"
 
-                    parts.append("<tr>")
-                    for header in block.headers:
-                        bg = "#666666" if is_total else "#d9d9e3"
-                        fg = "#ffffff" if is_total else "#111111"
+#                     parts.append("<tr>")
+#                     for header in block.headers:
+#                         bg = "#666666" if is_total else "#d9d9e3"
+#                         fg = "#ffffff" if is_total else "#111111"
 
-                        if not is_total and "_styles" in row and header in row["_styles"]:
-                            if row["_styles"][header] == "ok":
-                                bg = "#73bf69"
-                                fg = "#ffffff"
-                            elif row["_styles"][header] == "bad":
-                                bg = "#f2495c"
-                                fg = "#ffffff"
+#                         if not is_total and "_styles" in row and header in row["_styles"]:
+#                             if row["_styles"][header] == "ok":
+#                                 bg = "#73bf69"
+#                                 fg = "#ffffff"
+#                             elif row["_styles"][header] == "bad":
+#                                 bg = "#f2495c"
+#                                 fg = "#ffffff"
 
-                        parts.append(
-                            f"""
-                            <td style="
-                                border:1px solid #cfcfcf;
-                                padding:10px;
-                                text-align:center;
-                                background:{bg};
-                                color:{fg};
-                                font-size:14px;
-                                font-weight:bold;
-                            ">
-                                {row.get(header, "")}
-                            </td>
-                            """
-                        )
-                    parts.append("</tr>")
+#                         parts.append(
+#                             f"""
+#                             <td style="
+#                                 border:1px solid #cfcfcf;
+#                                 padding:10px;
+#                                 text-align:center;
+#                                 background:{bg};
+#                                 color:{fg};
+#                                 font-size:14px;
+#                                 font-weight:bold;
+#                             ">
+#                                 {row.get(header, "")}
+#                             </td>
+#                             """
+#                         )
+#                     parts.append("</tr>")
 
-                parts.append("</table>")
-                continue
+#                 parts.append("</table>")
+#                 continue
 
-            # Caso especial: bloco com um único cartão
-            if len(block.cards) == 1:
-                card = block.cards[0]
-                parts.append(
-                    f"""
-                    <table style="border-collapse:collapse; width:100%; max-width:900px; margin-bottom:18px;">
-                      <tr>
-                        <th style="border:1px solid #cfcfcf; padding:8px; background:#666666; color:#ffffff; text-align:center;">
-                          {card.label}
-                        </th>
-                      </tr>
-                      <tr>
-                        <td style="
-                            border:1px solid #cfcfcf;
-                            padding:18px 10px;
-                            text-align:center;
-                            background:{card.bg_color};
-                            color:{card.text_color};
-                            font-size:18px;
-                            font-weight:bold;
-                        ">
-                            {card.value}
-                        </td>
-                      </tr>
-                    </table>
-                    """
-                )
-                continue
+#             # Caso especial: bloco com um único cartão
+#             if len(block.cards) == 1:
+#                 card = block.cards[0]
+#                 parts.append(
+#                     f"""
+#                     <table style="border-collapse:collapse; width:100%; max-width:900px; margin-bottom:18px;">
+#                       <tr>
+#                         <th style="border:1px solid #cfcfcf; padding:8px; background:#666666; color:#ffffff; text-align:center;">
+#                           {card.label}
+#                         </th>
+#                       </tr>
+#                       <tr>
+#                         <td style="
+#                             border:1px solid #cfcfcf;
+#                             padding:18px 10px;
+#                             text-align:center;
+#                             background:{card.bg_color};
+#                             color:{card.text_color};
+#                             font-size:18px;
+#                             font-weight:bold;
+#                         ">
+#                             {card.value}
+#                         </td>
+#                       </tr>
+#                     </table>
+#                     """
+#                 )
+#                 continue
 
-            # Blocos normais com T1, T2, T3 e TOTAL
-            parts.append(
-                """
-                <table style="border-collapse:collapse; width:100%; max-width:900px; margin-bottom:18px;">
-                  <tr>
-                    <th style="border:1px solid #cfcfcf; padding:8px; background:#e9e9ef; text-align:center;">T1(08-16)</th>
-                    <th style="border:1px solid #cfcfcf; padding:8px; background:#e9e9ef; text-align:center;">T2(16-24)</th>
-                    <th style="border:1px solid #cfcfcf; padding:8px; background:#e9e9ef; text-align:center;">T3(00-08)</th>
-                    <th style="border:1px solid #cfcfcf; padding:8px; background:#666666; color:#ffffff; text-align:center;">TOTAL</th>
-                  </tr>
-                  <tr>
-                """
-            )
+#             # Blocos normais com T1, T2, T3 e TOTAL
+#             parts.append(
+#                 """
+#                 <table style="border-collapse:collapse; width:100%; max-width:900px; margin-bottom:18px;">
+#                   <tr>
+#                     <th style="border:1px solid #cfcfcf; padding:8px; background:#e9e9ef; text-align:center;">T1(08-16)</th>
+#                     <th style="border:1px solid #cfcfcf; padding:8px; background:#e9e9ef; text-align:center;">T2(16-24)</th>
+#                     <th style="border:1px solid #cfcfcf; padding:8px; background:#e9e9ef; text-align:center;">T3(00-08)</th>
+#                     <th style="border:1px solid #cfcfcf; padding:8px; background:#666666; color:#ffffff; text-align:center;">TOTAL</th>
+#                   </tr>
+#                   <tr>
+#                 """
+#             )
 
-            for card in block.cards:
-                parts.append(
-                    f"""
-                    <td style="
-                        border:1px solid #cfcfcf;
-                        padding:14px 10px;
-                        text-align:center;
-                        background:{card.bg_color};
-                        color:{card.text_color};
-                        font-size:16px;
-                        font-weight:bold;
-                    ">
-                        <div style="font-size:12px; font-weight:normal; margin-bottom:8px;">{card.label}</div>
-                        <div>{card.value}</div>
-                    </td>
-                    """
-                )
+#             for card in block.cards:
+#                 parts.append(
+#                     f"""
+#                     <td style="
+#                         border:1px solid #cfcfcf;
+#                         padding:14px 10px;
+#                         text-align:center;
+#                         background:{card.bg_color};
+#                         color:{card.text_color};
+#                         font-size:16px;
+#                         font-weight:bold;
+#                     ">
+#                         <div style="font-size:12px; font-weight:normal; margin-bottom:8px;">{card.label}</div>
+#                         <div>{card.value}</div>
+#                     </td>
+#                     """
+#                 )
 
-            parts.append("</tr></table>")
+#             parts.append("</tr></table>")
 
-    parts.append("</body></html>")
-    return "".join(parts)
+#     parts.append("</body></html>")
+#     return "".join(parts)
+def build_email_html(report_date: datetime) -> str:
+    """
+    Corpo simples do e-mail.
+    O detalhe segue apenas no PDF em anexo.
+    """
+    return f"""
+    <html>
+      <body style="font-family: Arial, sans-serif;">
+        <h2>Relatório Diário - {report_date.strftime('%d/%m/%Y')}</h2>
+        <p>Segue em anexo o relatório diário em PDF.</p>
+      </body>
+    </html>
+    """
 
 # Renderização HTML
 def render_html(report_date: datetime, sections: list[ReportSection]) -> str:
@@ -803,14 +816,18 @@ def export_debug_html(html: str, report_date: datetime) -> Path:
     Guarda uma cópia HTML local do report para debug visual.
     Útil para abrir no browser e ajustar layout antes do PDF.
     """
-    path = REPORTS_DIR / f"trituracao_{report_date.strftime('%d_%m_%Y')}.html"
+    # path = REPORTS_DIR / f"trituracao_{report_date.strftime('%d_%m_%Y')}.html"
+    path = REPORTS_DIR / f"relatorio_diario_{report_date.strftime('%d_%m_%Y')}.html"
     path.write_text(html, encoding="utf-8")
     return path
 
 # Geração de PDF
 def export_pdf(html: str, report_date: datetime) -> Path:
-    path = REPORTS_DIR / f"trituracao_{report_date.strftime('%d_%m_%Y')}.pdf"
-    html_path = REPORTS_DIR / f"trituracao_{report_date.strftime('%d_%m_%Y')}.html"
+    # path = REPORTS_DIR / f"trituracao_{report_date.strftime('%d_%m_%Y')}.pdf"
+    path = REPORTS_DIR / f"relatorio_diario_{report_date.strftime('%d_%m_%Y')}.pdf"
+    # html_path = REPORTS_DIR / f"trituracao_{report_date.strftime('%d_%m_%Y')}.html"
+    html_path = REPORTS_DIR / f"relatorio_diario_{report_date.strftime('%d_%m_%Y')}.html"
+
     html_path.write_text(html, encoding="utf-8")
 
     with sync_playwright() as p:
@@ -830,6 +847,10 @@ def export_pdf(html: str, report_date: datetime) -> Path:
             },
         )
         browser.close()
+    
+    # Apaga o HTML temporário logo após gerar o PDF
+    if html_path.exists():
+        html_path.unlink()
 
     return path
 
@@ -840,7 +861,7 @@ def build_plain_text(report_date: datetime) -> str:
     que não renderizam HTML corretamente.
     """
     return (
-        f"Relatório Diário - Trituração - {report_date.strftime('%d/%m/%Y')}\n\n"
+        f"Relatório Diário - {report_date.strftime('%d/%m/%Y')}\n\n"
         "Segue em anexo o relatório diário em PDF."
     )
 
@@ -920,9 +941,10 @@ def main() -> None:
     sections = get_daily_sections()
 
     pdf_html = render_html(report_date, sections)
-    email_html = render_email_html(report_date, sections)
+    # email_html = render_email_html(report_date, sections)
+    email_html = build_email_html(report_date)
 
-    debug_html_path = export_debug_html(pdf_html, report_date)
+    #debug_html_path = export_debug_html(pdf_html, report_date)
     pdf_path = export_pdf(pdf_html, report_date)
 
     if os.environ.get("SEND_EMAIL", "true").lower() == "true":
@@ -936,8 +958,13 @@ def main() -> None:
     else:
         print("SEND_EMAIL=false, e-mail não enviado.")
 
-    print(f"HTML debug criado: {debug_html_path}")
+    #print(f"HTML debug criado: {debug_html_path}")
     print(f"PDF criado: {pdf_path}")
+
+    # Apaga o PDF no fim, mesmo que o envio falhe parcialmente
+    if pdf_path and pdf_path.exists():
+        pdf_path.unlink()
+        print(f"PDF apagado: {pdf_path}")
 
 if __name__ == "__main__":
     main()
