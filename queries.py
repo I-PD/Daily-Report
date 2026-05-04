@@ -3,20 +3,6 @@
 # cada query é uma string multi-linha, e deve ser escrita de forma a ser legível e fácil de manter
 ##################
 
-# now_local AS (
-#     SELECT (now() AT TIME ZONE 'Europe/Lisbon')::timestamp AS now_local
-#   ),
-#   base AS (
-#     SELECT
-#       date_trunc('day', now_local)::timestamp AS today_local,
-#       CASE
-#         WHEN EXTRACT(ISODOW FROM now_local) = 1
-#           THEN (date_trunc('day', now_local) - interval '3 days')::timestamp   -- 2ª feira => 6ª feira
-#         ELSE (date_trunc('day', now_local) - interval '1 day')::timestamp     -- resto => ontem
-#       END AS day1_local
-#     FROM now_local
-#   ),
-
 QUERY_TEMPO_PRODUCAO_MD = """
 WITH
 base AS (
