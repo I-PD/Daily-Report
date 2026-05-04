@@ -34,10 +34,7 @@ from queries import (
     QUERY_DESINF_TRIT_TOTAL_SILOS_8H,
     QUERY_CALIB_GRANULADO_DIA_ANTERIOR,
     QUERY_DESINF_VINC_DESINFECOES_DIA_ANTERIOR,
-    QUERY_PERFORMANCE_CALIB,
-    QUERY_DISPONIBILIDADE_CALIB,
-    QUERY_OEE_CALIB,
-    QUERY_TEMPO_SEM_GRANULADO_CALIB,
+    QUERY_CALIB_OEE_TABELA_DIA_ANTERIOR,
 )
 
 # Configuração base do projeto
@@ -178,27 +175,12 @@ def get_report_date() -> datetime:
     report_day = previous_operational_day(now)
 
     return datetime.combine(report_day, dt_time(0, 0), tzinfo=TZ)
-# def get_report_date() -> datetime:
-#     """
-#     Define a data de referência do relatório:
-#     - se hoje é segunda-feira -> devolve sexta-feira
-#     - caso contrário -> devolve ontem
-#     """
-#     today = datetime.now()
-#     if today.weekday() == 0:  # segunda-feira
-#         return today - timedelta(days=3)
-#     return today - timedelta(days=1)
+
 def get_today_local_date() -> str:
     """
     Devolve a data local de hoje em formato dd/mm/YYYY.
     """
     return datetime.now(TZ).strftime("%d/%m/%Y")
-
-# def get_today_local_date() -> str:
-#     """
-#     Devolve a data local de hoje em formato dd/mm/YYYY.
-#     """
-#     return datetime.now().strftime("%d/%m/%Y")
 
 # Ligação à base de dados
 def get_db_connection():
@@ -353,7 +335,7 @@ def build_calibracao_granulado_block(rows: list[dict[str, object]]) -> ReportTab
             "T2 (14-22)": format_kg(row.get("T2 (14-22)", 0)),
             "T3 (22-06)": format_kg(row.get("T3 (22-06)", 0)),
             "Total (Kg)": format_kg(row.get("Total (Kg)", 0)),
-            "%": "" if produto == "Total" else format_pct(row.get("%", 0)),
+            "%": "" if produto == "Total" else format_pct(row.get("Percentagem", 0)),
         })
 
     return ReportTableBlock(
@@ -371,13 +353,14 @@ def build_calibracao_granulado_block(rows: list[dict[str, object]]) -> ReportTab
     )
 
 # Builder da tabela OEE Calibração - Dia Anterior
-def build_calibracao_oee_block(
-    performance_values: dict[str, object],
-    disponibilidade_values: dict[str, object],
-    oee_values: dict[str, object],
-    tempo_sem_granulado_values: dict[str, object],
-) -> ReportTableBlock:
+def build_calibracao_oee_block(rows: list[dict[str, object]]) -> ReportTableBlock:
+    """
+    Constrói a tabela de Performance / Disponibilidade / OEE /
+    Tempo Trabalho sem granulado.
 
+    A query já devolve as 4 linhas da tabela.
+    Aqui só formatamos valores e aplicamos cores.
+    """
     headers = [
         "Indicador",
         "T1 (06-14)",
@@ -386,40 +369,34 @@ def build_calibracao_oee_block(
         "Dia",
     ]
 
-    def build_percent_row(label: str, values: dict[str, object], apply_colors: bool = False):
-        row = {"Indicador": label, "_styles": {}}
+    formatted_rows: list[dict[str, object]] = []
+
+    for row in rows:
+        indicador = str(row.get("Indicador", ""))
+        formatted_row: dict[str, object] = {
+            "Indicador": indicador,
+            "_styles": {},
+        }
 
         for col in ["T1 (06-14)", "T2 (14-22)", "T3 (22-06)", "Dia"]:
-            value = float(values.get(col, 0) or 0)
-            row[col] = format_pct(value)
+            raw_value = float(row.get(col, 0) or 0)
 
-            if apply_colors:
-                row["_styles"][col] = get_oee_calib_style(value)
+            if indicador == "Tempo Trabalho sem granulado":
+                formatted_row[col] = format_seconds_hhmmss(raw_value)
+                formatted_row["_styles"][col] = get_tempo_sem_granulado_style(raw_value)
+            else:
+                formatted_row[col] = format_pct(raw_value)
 
-        return row
+                if indicador == "OEE":
+                    formatted_row["_styles"][col] = get_oee_calib_style(raw_value)
 
-    def build_time_row(label: str, values: dict[str, object]):
-        row = {"Indicador": label, "_styles": {}}
-
-        for col in ["T1 (06-14)", "T2 (14-22)", "T3 (22-06)", "Dia"]:
-            value = float(values.get(col, 0) or 0)
-            row[col] = format_seconds_hhmmss(value)
-            row["_styles"][col] = get_tempo_sem_granulado_style(value)
-
-        return row
-
-    rows = [
-        build_percent_row("Performance", performance_values),
-        build_percent_row("Disponibilidade", disponibilidade_values),
-        build_percent_row("OEE", oee_values, apply_colors=True),
-        build_time_row("Tempo Trabalho sem granulado", tempo_sem_granulado_values),
-    ]
+        formatted_rows.append(formatted_row)
 
     return ReportTableBlock(
         key="calibracao_oee_dia_anterior",
-        title="Cálculo OEE - Dia Anterior",
+        title="Cálculo OEE",
         headers=headers,
-        rows=rows,
+        rows=formatted_rows,
     )
 
 # Builder da tabela Desinfeção VINC
@@ -533,15 +510,20 @@ def build_oee_block(values: dict[str, object]) -> MetricBlock:
 # 1) Executar as queries reais
 # 2) Separar os blocos por secção
 # 3) Devolver uma estrutura organizada para o PDF e para o e-mail
-def get_daily_sections() -> list[ReportSection]:
+def get_daily_sections(report_date: datetime) -> list[ReportSection]:
     today_label = get_today_local_date()
     report_date_label = get_report_date().strftime("%d/%m/%Y")
+
+    query_params = {
+        "report_date": report_date.date()
+    }
+
     # Secção: Trituração
     total_silos_8h = run_scalar_query(QUERY_TRIT_TOTAL_SILOS_8H)
-    tempo_values = run_single_row_query(QUERY_TEMPO_PRODUCAO_MD)
-    horas_values = run_single_row_query(QUERY_HORAS_MOINHOS)
-    kgs_values = run_single_row_query(QUERY_KGS_SILOS)
-    oee_values = run_single_row_query(QUERY_OEE)
+    tempo_values = run_single_row_query(QUERY_TEMPO_PRODUCAO_MD, query_params)
+    horas_values = run_single_row_query(QUERY_HORAS_MOINHOS, query_params)
+    kgs_values = run_single_row_query(QUERY_KGS_SILOS, query_params)
+    oee_values = run_single_row_query(QUERY_OEE, query_params)
 
     trituracao_blocks = [
         build_standard_block(
@@ -568,7 +550,8 @@ def get_daily_sections() -> list[ReportSection]:
 
     # Secção: Desinfeção Trituração
     desinf_kgs_values = run_single_row_query(
-        QUERY_DESINF_TRIT_KGS_SILOS_DIA_ANTERIOR
+        QUERY_DESINF_TRIT_KGS_SILOS_DIA_ANTERIOR,
+        query_params,
     )
     desinf_total_silos_8h = run_scalar_query(
         QUERY_DESINF_TRIT_TOTAL_SILOS_8H
@@ -588,27 +571,24 @@ def get_daily_sections() -> list[ReportSection]:
 
     # Secção: Calibração
     calibracao_rows = run_multi_row_query(
-        QUERY_CALIB_GRANULADO_DIA_ANTERIOR
+        QUERY_CALIB_GRANULADO_DIA_ANTERIOR,
+        query_params,
     )
 
-    performance_calib_values = run_single_row_query(QUERY_PERFORMANCE_CALIB)
-    disponibilidade_calib_values = run_single_row_query(QUERY_DISPONIBILIDADE_CALIB)
-    oee_calib_values = run_single_row_query(QUERY_OEE_CALIB)
-    tempo_sem_granulado_calib_values = run_single_row_query(QUERY_TEMPO_SEM_GRANULADO_CALIB)
+    calibracao_oee_rows = run_multi_row_query(
+        QUERY_CALIB_OEE_TABELA_DIA_ANTERIOR,
+        query_params,
+    )
 
     calibracao_blocks = [
         build_calibracao_granulado_block(calibracao_rows),
-         build_calibracao_oee_block(
-            performance_calib_values,
-            disponibilidade_calib_values,
-            oee_calib_values,
-            tempo_sem_granulado_calib_values,
-        ),
+        build_calibracao_oee_block(calibracao_oee_rows),
     ]
 
     # Secção: Desinfeção VINC
     desinf_vinc_rows = run_multi_row_query(
-        QUERY_DESINF_VINC_DESINFECOES_DIA_ANTERIOR
+        QUERY_DESINF_VINC_DESINFECOES_DIA_ANTERIOR,
+        query_params,
     )
 
     desinf_vinc_blocks = [
@@ -938,7 +918,7 @@ def main() -> None:
 
     report_date = get_report_date()
     #Usam-se secções, não uma lista única de blocos
-    sections = get_daily_sections()
+    sections = get_daily_sections(report_date)
 
     pdf_html = render_html(report_date, sections)
     # email_html = render_email_html(report_date, sections)
@@ -958,7 +938,6 @@ def main() -> None:
     else:
         print("SEND_EMAIL=false, e-mail não enviado.")
 
-    #print(f"HTML debug criado: {debug_html_path}")
     print(f"PDF criado: {pdf_path}")
 
     # Apaga o PDF no fim, mesmo que o envio falhe parcialmente
