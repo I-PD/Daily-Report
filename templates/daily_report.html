@@ -96,7 +96,10 @@ Relatório Diário
                   <thead>
                     <tr>
                       {% for header in block.headers %}
-                        <th>{{ header }}</th>
+                        {% set header_style = block.rows[0]._header_styles[header] if block.rows and block.rows[0]._header_styles is defined and header in block.rows[0]._header_styles else "" %}
+                        <th class="{% if header_style == 'green' %}header-green{% elif header_style == 'blue' %}header-blue{% endif %}">
+                          {{ header }}
+                        </th>
                       {% endfor %}
                     </tr>
                   </thead>

@@ -35,6 +35,8 @@ from queries import (
     QUERY_CALIB_GRANULADO_DIA_ANTERIOR,
     QUERY_DESINF_VINC_DESINFECOES_DIA_ANTERIOR,
     QUERY_CALIB_OEE_TABELA_DIA_ANTERIOR,
+    QUERY_DESINF_TRIT_DIA_ANTERIOR,
+    QUERY_DESINF_VINC_8H,
 )
 
 # Configuração base do projeto
@@ -216,7 +218,7 @@ def format_kg(value: object) -> str:
     """
     if value is None:
         return "0 kg"
-    return f"{int(round(float(value)))} kg"
+    return f"{int(round(float(value))):,}".replace(",", " ") + " kg"
 
 def format_pct(value: object) -> str:
     """
@@ -440,6 +442,79 @@ def build_desinf_vinc_desinfecoes_block(rows: list[dict[str, object]]) -> Report
         rows=formatted_rows,
     )
 
+# Builder de Desinfeção Trituração - Dia Anterior
+def build_desinf_trit_desinfecoes_block(rows: list[dict[str, object]]) -> ReportTableBlock:
+    formatted_rows: list[dict[str, object]] = []
+
+    for row in rows:
+        vapex = str(row.get("VAPEX", ""))
+        is_total_row = vapex == "TOTAL"
+
+        t1 = int(row.get("T1 (08-16)", 0) or 0)
+        t2 = int(row.get("T2 (16-24)", 0) or 0)
+        t3 = int(row.get("T3 (00-08)", 0) or 0)
+        total = int(row.get("Total", 0) or 0)
+
+        formatted_rows.append({
+            "VAPEX": vapex,
+            "T1 (08-16)": t1,
+            "T2 (16-24)": t2,
+            "T3 (00-08)": t3,
+            "Total": total,
+            "_styles": {} if is_total_row else {
+                "T1 (08-16)": "ok" if t1 >= 4 else "bad",
+                "T2 (16-24)": "ok" if t2 >= 4 else "bad",
+                "T3 (00-08)": "ok" if t3 >= 4 else "bad",
+            }
+        })
+
+    return ReportTableBlock(
+        key="desinf_trit_desinfecoes_dia_anterior",
+        title="Nº Desinfeções",
+        headers=[
+            "VAPEX",
+            "T1 (08-16)",
+            "T2 (16-24)",
+            "T3 (00-08)",
+            "Total",
+        ],
+        rows=formatted_rows,
+    )
+
+# Builder Desinfeção VINC - Total Silos às 8h
+def build_desinf_vinc_silos_8h_block(values: dict[str, object]) -> ReportTableBlock:
+    headers = [
+        "SILO 1: 3A7 CS",
+        "SILO 2: 2A3 CS",
+        "SILO 3: 1A2 CS",
+        "SILO 4: 05A1 CS",
+        "SILO 5: 1A2 VINC",
+        "SILO 6: 05A1 VINC",
+    ]
+
+    row = {
+        "_styles": {},
+        "_header_styles": {
+            "SILO 1: 3A7 CS": "green",
+            "SILO 2: 2A3 CS": "green",
+            "SILO 3: 1A2 CS": "green",
+            "SILO 4: 05A1 CS": "green",
+            "SILO 5: 1A2 VINC": "blue",
+            "SILO 6: 05A1 VINC": "blue",
+        },
+    }
+
+    for header in headers:
+        row[header] = format_kg(values.get(header, 0))
+
+    return ReportTableBlock(
+        key="desinf_vinc_silos_8h",
+        title=f"Peso Silos Desinfeção VINC às 8h ({get_today_local_date()})",
+        headers=headers,
+        rows=[row],
+    )
+
+# Builder de blocos com um único cartão grande (ex: Total Silos às 8h)
 def run_scalar_query(query: str, params: dict | None = None) -> object:
     """
     Executa uma query que devolve uma única linha e uma única coluna.
@@ -458,6 +533,24 @@ def run_scalar_query(query: str, params: dict | None = None) -> object:
         raise RuntimeError("A query escalar não devolveu resultados.")
 
     return next(iter(row.values()))
+
+def run_single_vinc_row_query(query: str, params: dict | None = None) -> dict[str, object]:
+    """
+    Executa uma query de uma linha, mas devolve TODAS as colunas.
+    Usar para tabelas que não têm T1/T2/T3/TOTAL.
+    """
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            if params:
+                cur.execute(query, params)
+            else:
+                cur.execute(query)
+            row = cur.fetchone()
+
+    if not row:
+        raise RuntimeError("A query não devolveu resultados.")
+
+    return dict(row)
 
 def build_single_total_block(title: str, value: object, suffix: str = "") -> MetricBlock:
     """
@@ -553,8 +646,14 @@ def get_daily_sections(report_date: datetime) -> list[ReportSection]:
         QUERY_DESINF_TRIT_KGS_SILOS_DIA_ANTERIOR,
         query_params,
     )
+
     desinf_total_silos_8h = run_scalar_query(
         QUERY_DESINF_TRIT_TOTAL_SILOS_8H
+    )
+
+    desinf_trit_rows = run_multi_row_query(
+        QUERY_DESINF_TRIT_DIA_ANTERIOR,
+        query_params,
     )
 
     desinf_blocks = [
@@ -567,6 +666,7 @@ def get_daily_sections(report_date: datetime) -> list[ReportSection]:
             f"Total Silos PD 6 a 10 às 8h ({today_label})",
             desinf_total_silos_8h,
         ),
+        build_desinf_trit_desinfecoes_block(desinf_trit_rows),
     ]
 
     # Secção: Calibração
@@ -586,6 +686,10 @@ def get_daily_sections(report_date: datetime) -> list[ReportSection]:
     ]
 
     # Secção: Desinfeção VINC
+    desinf_vinc_silos_values = run_single_vinc_row_query(
+        QUERY_DESINF_VINC_8H,
+    )
+    
     desinf_vinc_rows = run_multi_row_query(
         QUERY_DESINF_VINC_DESINFECOES_DIA_ANTERIOR,
         query_params,
@@ -593,6 +697,7 @@ def get_daily_sections(report_date: datetime) -> list[ReportSection]:
 
     desinf_vinc_blocks = [
         build_desinf_vinc_desinfecoes_block(desinf_vinc_rows),
+        build_desinf_vinc_silos_8h_block(desinf_vinc_silos_values),
     ]
 
     # Resultado final
@@ -617,148 +722,6 @@ def get_daily_sections(report_date: datetime) -> list[ReportSection]:
     ]
 
 # Renderização HTML para e-mail
-# def render_email_html(report_date: datetime, sections: list[ReportSection]) -> str:
-#     parts = [
-#         "<html><head><meta charset='UTF-8'></head>",
-#         "<body style='font-family: Arial, sans-serif; color:#111111; background:#ffffff;'>",
-#         f"<h2 style='margin-bottom:8px;'>Relatório Diário - {report_date.strftime('%d/%m/%Y')}</h2>",
-#         "<p style='margin-top:0;'>Segue em anexo o relatório diário em PDF.</p>",
-#     ]
-
-#     for section in sections:
-#         parts.append(
-#             f"<h3 style='margin:24px 0 10px 0; color:#111111; border-bottom:2px solid #d0d0d0; padding-bottom:6px;'>"
-#             f"{section.title}</h3>"
-#         )
-
-#         for block in section.blocks:
-#             parts.append(
-#                 f"<h4 style='margin:18px 0 8px 0; color:#111111;'>{block.title}</h4>"
-#             )
-
-#             # Caso especial: bloco do tipo tabela
-#             if hasattr(block, "rows"):
-#                 parts.append(
-#                     """
-#                     <table style="border-collapse:collapse; width:100%; max-width:900px; margin-bottom:18px;">
-#                       <tr>
-#                     """
-#                 )
-
-#                 for header in block.headers:
-#                     parts.append(
-#                         f"""
-#                         <th style="border:1px solid #cfcfcf; padding:8px; background:#e9e9ef; text-align:center;">
-#                             {header}
-#                         </th>
-#                         """
-#                     )
-
-#                 parts.append("</tr>")
-
-#                 for row in block.rows:
-#                     is_total = row.get("Produto") == "Total"
-#                     bg = "#666666" if is_total else "#d9d9e3"
-#                     fg = "#ffffff" if is_total else "#111111"
-
-#                     parts.append("<tr>")
-#                     for header in block.headers:
-#                         bg = "#666666" if is_total else "#d9d9e3"
-#                         fg = "#ffffff" if is_total else "#111111"
-
-#                         if not is_total and "_styles" in row and header in row["_styles"]:
-#                             if row["_styles"][header] == "ok":
-#                                 bg = "#73bf69"
-#                                 fg = "#ffffff"
-#                             elif row["_styles"][header] == "bad":
-#                                 bg = "#f2495c"
-#                                 fg = "#ffffff"
-
-#                         parts.append(
-#                             f"""
-#                             <td style="
-#                                 border:1px solid #cfcfcf;
-#                                 padding:10px;
-#                                 text-align:center;
-#                                 background:{bg};
-#                                 color:{fg};
-#                                 font-size:14px;
-#                                 font-weight:bold;
-#                             ">
-#                                 {row.get(header, "")}
-#                             </td>
-#                             """
-#                         )
-#                     parts.append("</tr>")
-
-#                 parts.append("</table>")
-#                 continue
-
-#             # Caso especial: bloco com um único cartão
-#             if len(block.cards) == 1:
-#                 card = block.cards[0]
-#                 parts.append(
-#                     f"""
-#                     <table style="border-collapse:collapse; width:100%; max-width:900px; margin-bottom:18px;">
-#                       <tr>
-#                         <th style="border:1px solid #cfcfcf; padding:8px; background:#666666; color:#ffffff; text-align:center;">
-#                           {card.label}
-#                         </th>
-#                       </tr>
-#                       <tr>
-#                         <td style="
-#                             border:1px solid #cfcfcf;
-#                             padding:18px 10px;
-#                             text-align:center;
-#                             background:{card.bg_color};
-#                             color:{card.text_color};
-#                             font-size:18px;
-#                             font-weight:bold;
-#                         ">
-#                             {card.value}
-#                         </td>
-#                       </tr>
-#                     </table>
-#                     """
-#                 )
-#                 continue
-
-#             # Blocos normais com T1, T2, T3 e TOTAL
-#             parts.append(
-#                 """
-#                 <table style="border-collapse:collapse; width:100%; max-width:900px; margin-bottom:18px;">
-#                   <tr>
-#                     <th style="border:1px solid #cfcfcf; padding:8px; background:#e9e9ef; text-align:center;">T1(08-16)</th>
-#                     <th style="border:1px solid #cfcfcf; padding:8px; background:#e9e9ef; text-align:center;">T2(16-24)</th>
-#                     <th style="border:1px solid #cfcfcf; padding:8px; background:#e9e9ef; text-align:center;">T3(00-08)</th>
-#                     <th style="border:1px solid #cfcfcf; padding:8px; background:#666666; color:#ffffff; text-align:center;">TOTAL</th>
-#                   </tr>
-#                   <tr>
-#                 """
-#             )
-
-#             for card in block.cards:
-#                 parts.append(
-#                     f"""
-#                     <td style="
-#                         border:1px solid #cfcfcf;
-#                         padding:14px 10px;
-#                         text-align:center;
-#                         background:{card.bg_color};
-#                         color:{card.text_color};
-#                         font-size:16px;
-#                         font-weight:bold;
-#                     ">
-#                         <div style="font-size:12px; font-weight:normal; margin-bottom:8px;">{card.label}</div>
-#                         <div>{card.value}</div>
-#                     </td>
-#                     """
-#                 )
-
-#             parts.append("</tr></table>")
-
-#     parts.append("</body></html>")
-#     return "".join(parts)
 def build_email_html(report_date: datetime) -> str:
     """
     Corpo simples do e-mail.
@@ -767,8 +730,8 @@ def build_email_html(report_date: datetime) -> str:
     return f"""
     <html>
       <body style="font-family: Arial, sans-serif;">
-        <h2>Relatório Diário - {report_date.strftime('%d/%m/%Y')}</h2>
-        <p>Segue em anexo o relatório diário em PDF.</p>
+        <h2>Relatório Diário Granulados - {report_date.strftime('%d/%m/%Y')}</h2>
+        <p>Segue em anexo o relatório diário de granulados em PDF.</p>
       </body>
     </html>
     """
@@ -841,8 +804,8 @@ def build_plain_text(report_date: datetime) -> str:
     que não renderizam HTML corretamente.
     """
     return (
-        f"Relatório Diário - {report_date.strftime('%d/%m/%Y')}\n\n"
-        "Segue em anexo o relatório diário em PDF."
+        f"Relatório Diário Granulados - {report_date.strftime('%d/%m/%Y')}\n\n"
+        "Segue em anexo o relatório diário de granulados em PDF."
     )
 
 # Envio de e-mail
@@ -929,7 +892,7 @@ def main() -> None:
 
     if os.environ.get("SEND_EMAIL", "true").lower() == "true":
         send_email(
-            subject=f"Relatório Diário - {report_date.strftime('%d/%m/%Y')}",
+            subject=f"Relatório Diário Granulados - {report_date.strftime('%d/%m/%Y')}",
             html_body=email_html,
             text_body=build_plain_text(report_date),
             attachments=[pdf_path],

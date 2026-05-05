@@ -152,7 +152,8 @@
   }
   
   .report-table td:first-child {
-    text-align: left;
+    /* text-align: left; */
+    text-align: center;
     padding-left: 14px;
   }
   
@@ -176,4 +177,15 @@
   .report-table td.cell-warning {
     background: #eab839;
     color: #111111;
+  }
+
+  /* Cores especiais para cabeçalhos dos silos VINC */
+  .report-table th.header-green {
+    background: #73bf69;
+    color: #ffffff;
+  }
+
+  .report-table th.header-blue {
+    background: #5794f2;
+    color: #ffffff;
   }

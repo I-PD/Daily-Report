@@ -421,32 +421,119 @@ deltas AS (
 kg_by_shift AS (
   SELECT
     turno_id, turno,
-    SUM(CASE WHEN estado_silo = 1 AND delta_kg > 0 THEN delta_kg ELSE 0 END) AS kg_produzidos
+    SUM(
+      CASE 
+        WHEN estado_silo = 1 AND delta_kg > 0 THEN delta_kg 
+        ELSE 0 
+      END
+    ) AS kg_produzidos
   FROM deltas
   GROUP BY turno_id, turno
 ),
-plan_by_shift AS (
+work_in_shift AS(
+  SELECT 
+    s.turno_id, s.turno, s.start_ts, s.end_eff,
+    t.sf_id, t.freq_sf, t.created_at
+  FROM shifts s
+  JOIN trituracao.sem_fins t
+    ON t.created_at >= s.start_ts
+    AND t.created_at < s.end_eff
+  WHERE t.sf_id IN (1,2,3,4,5)
+),
+work_baseline AS (
+  SELECT
+    s.turno_id, s.turno, s.start_ts, s.end_eff,
+    t.sf_id, t.freq_sf, t.created_at
+  FROM shifts s
+  JOIN LATERAL (
+    SELECT DISTINCT ON (x.sf_id)
+      x.sf_id, x.freq_sf, x.created_at
+    FROM trituracao.sem_fins x
+    WHERE x.sf_id IN (1,2,3,4,5)
+      AND x.created_at < s.start_ts
+      AND x.created_at >= s.start_ts - interval '12 hours'
+    ORDER BY x.sf_id, x.created_at DESC
+  ) t ON true
+),
+work_samples AS (
+  SELECT * FROM work_baseline
+  UNION ALL
+  SELECT * FROM work_in_shift
+),
+work_segments AS (
+  SELECT
+    turno_id, turno, start_ts, end_eff,
+    sf_id, freq_sf, created_at,
+    lead(created_at) OVER (
+      PARTITION BY turno_id, sf_id
+      ORDER BY created_at
+    ) AS next_at
+  FROM work_samples
+),
+work_durations AS (
   SELECT
     turno_id,
-    EXTRACT(EPOCH FROM (end_eff - start_ts)) / 3600.0 AS horas_planeadas
-  FROM shifts
+    turno,
+    sf_id,
+    CASE
+      WHEN freq_sf > 1 THEN
+        EXTRACT(EPOCH FROM (
+          LEAST(
+            COALESCE(next_at, end_eff),
+            created_at + interval '2 minutes',
+            end_eff
+          ) - GREATEST(created_at, start_ts)
+        ))
+      ELSE 0
+    END AS work_seconds
+  FROM work_segments
+  WHERE LEAST(
+          COALESCE(next_at, end_eff),
+          created_at + interval '2 minutes',
+          end_eff
+        ) > GREATEST(created_at, start_ts)
+),
+work_by_sf AS (
+  SELECT
+    turno_id,
+    turno,
+    sf_id,
+    SUM(work_seconds) AS work_seconds
+  FROM work_durations
+  GROUP BY turno_id, turno, sf_id
+),
+work_by_shift AS (
+  SELECT
+    turno_id,
+    turno,
+    MAX(work_seconds) AS work_seconds
+  FROM work_by_sf
+  GROUP BY turno_id, turno
 ),
 oee_by_shift AS (
   SELECT
-    p.turno_id,
+    s.turno_id,
+    s.turno,
     COALESCE(k.kg_produzidos, 0) AS kg_produzidos,
-    COALESCE(p.horas_planeadas, 0) AS horas_planeadas,
+    COALESCE(w.work_seconds, 0) AS work_seconds,
+    COALESCE(w.work_seconds, 0) / 3600.0 AS horas_trabalhadas,
     CASE
-      WHEN COALESCE(p.horas_planeadas, 0) > 0
-        THEN LEAST(
+      WHEN COALESCE(w.work_seconds, 0) > 0 THEN
+        LEAST(
           100.0,
           100.0 * COALESCE(k.kg_produzidos, 0)
-          / ((SELECT cadencia_kg_h FROM params) * p.horas_planeadas)
+          / (
+              (SELECT cadencia_kg_h FROM params)
+              * (COALESCE(w.work_seconds, 0) / 3600.0)
+            )
         )
       ELSE 0
     END AS oee_pct
-  FROM plan_by_shift p
-  LEFT JOIN kg_by_shift k USING (turno_id)
+  FROM shifts s
+  LEFT JOIN kg_by_shift k
+    ON k.turno_id = s.turno_id
+  LEFT JOIN work_by_shift w
+    ON w.turno_id = s.turno_id
 ),
 pivot AS (
   SELECT
@@ -454,8 +541,9 @@ pivot AS (
     COALESCE(MAX(oee_pct) FILTER (WHERE turno_id=2), 0) AS t2_oee,
     COALESCE(MAX(oee_pct) FILTER (WHERE turno_id=3), 0) AS t3_oee,
     CASE
-      WHEN SUM(horas_planeadas) > 0
-        THEN 100.0 * SUM(kg_produzidos) / ((SELECT cadencia_kg_h FROM params) * SUM(horas_planeadas))
+      WHEN SUM(work_seconds) > 0 THEN 
+        LEAST(100.0, 
+          100.0 * SUM(kg_produzidos) / ((SELECT cadencia_kg_h FROM params) * SUM(work_seconds)/3600.0))
       ELSE 0
     END AS total_oee
   FROM oee_by_shift
@@ -1181,4 +1269,220 @@ SELECT
   ROUND(tempo_t3, 0) AS "T3 (22-06)",
   ROUND((SELECT tempo_sem_granulado_dia FROM kpis_day), 0) AS "Dia"
 FROM pivot;
+"""
+QUERY_DESINF_TRIT_DIA_ANTERIOR="""
+WITH
+base AS (
+  SELECT
+    (%(report_date)s::date)::timestamp AS day_ref_local
+),
+shift_def AS (
+  SELECT * FROM (VALUES
+    (1, 'T1 (08-16)', interval '8 hours',  interval '16 hours'),
+    (2, 'T2 (16-24)', interval '16 hours', interval '24 hours'),
+    (3, 'T3 (00-08)', interval '24 hours', interval '32 hours')
+  ) v(turno_id, turno, start_off, end_off)
+),
+shifts AS (
+  SELECT
+    sd.turno_id,
+    sd.turno,
+    b.day_ref_local + sd.start_off AS start_local,
+    b.day_ref_local + sd.end_off   AS end_local
+  FROM base b
+  CROSS JOIN shift_def sd
+),
+raw_data AS (
+  SELECT
+    'VAPEX 5' AS vapex,
+    record_id,
+    created_at,
+    (created_at AT TIME ZONE 'Europe/Lisbon')::timestamp AS created_at_local,
+    operation_id,
+    tempo_teorico
+  FROM desinfecao.machine_5
+
+  UNION ALL
+
+  SELECT
+    'VAPEX 6' AS vapex,
+    record_id,
+    created_at,
+    (created_at AT TIME ZONE 'Europe/Lisbon')::timestamp AS created_at_local,
+    operation_id,
+    tempo_teorico
+  FROM desinfecao.machine_6
+
+  UNION ALL
+
+  SELECT
+    'VAPEX 7' AS vapex,
+    record_id,
+    created_at,
+    (created_at AT TIME ZONE 'Europe/Lisbon')::timestamp AS created_at_local,
+    operation_id,
+    tempo_teorico
+  FROM desinfecao.machine_7
+
+  UNION ALL
+
+  SELECT
+    'VAPEX 8' AS vapex,
+    record_id,
+    created_at,
+    (created_at AT TIME ZONE 'Europe/Lisbon')::timestamp AS created_at_local,
+    operation_id,
+    tempo_teorico
+  FROM desinfecao.machine_8
+
+  UNION ALL
+
+  SELECT
+    'VAPEX 9' AS vapex,
+    record_id,
+    created_at,
+    (created_at AT TIME ZONE 'Europe/Lisbon')::timestamp AS created_at_local,
+    operation_id,
+    tempo_teorico
+  FROM desinfecao.machine_9
+),
+base_data AS (
+  SELECT
+    r.*,
+    LAG(operation_id) OVER (
+      PARTITION BY vapex
+      ORDER BY created_at, record_id
+    ) AS prev_operation_id
+  FROM raw_data r
+  CROSS JOIN base b
+  WHERE r.created_at_local >= b.day_ref_local - interval '12 hours'
+    AND r.created_at_local <  b.day_ref_local + interval '36 hours'
+    AND r.operation_id IS NOT NULL
+),
+marcados AS (
+  SELECT
+    *,
+    CASE
+      WHEN prev_operation_id IS DISTINCT FROM operation_id THEN 1
+      ELSE 0
+    END AS novo_ciclo
+  FROM base_data
+),
+grupos AS (
+  SELECT
+    *,
+    SUM(novo_ciclo) OVER (
+      PARTITION BY vapex
+      ORDER BY created_at, record_id
+    ) AS ciclo_grp
+  FROM marcados
+),
+ciclos AS (
+  SELECT
+    vapex,
+    ciclo_grp,
+    MIN(operation_id) AS operation_id,
+    MIN(created_at_local) AS inicio_ciclo_local,
+    MAX(tempo_teorico) AS tempo_teorico,
+    MIN(created_at_local) + (MAX(tempo_teorico) * interval '1 minute') AS fim_programado_local
+  FROM grupos
+  GROUP BY vapex, ciclo_grp
+),
+ciclos_validos AS (
+  SELECT *
+  FROM ciclos
+  WHERE tempo_teorico > 45
+),
+counts_by_shift AS (
+  SELECT
+    cv.vapex,
+    s.turno_id,
+    COUNT(*) AS qtd
+  FROM ciclos_validos cv
+  JOIN shifts s
+    ON cv.fim_programado_local >= s.start_local
+   AND cv.fim_programado_local <  s.end_local
+  GROUP BY cv.vapex, s.turno_id
+),
+pivot_vapex AS (
+  SELECT
+    vapex,
+    COALESCE(SUM(qtd) FILTER (WHERE turno_id = 1), 0) AS t1,
+    COALESCE(SUM(qtd) FILTER (WHERE turno_id = 2), 0) AS t2,
+    COALESCE(SUM(qtd) FILTER (WHERE turno_id = 3), 0) AS t3
+  FROM counts_by_shift
+  GROUP BY vapex
+),
+all_vapex AS (
+  SELECT * FROM (VALUES
+    ('VAPEX 5'),
+    ('VAPEX 6'),
+    ('VAPEX 7'),
+    ('VAPEX 8'),
+    ('VAPEX 9')
+  ) v(vapex)
+),
+rows_vapex AS (
+  SELECT
+    a.vapex,
+    COALESCE(p.t1, 0) AS t1,
+    COALESCE(p.t2, 0) AS t2,
+    COALESCE(p.t3, 0) AS t3
+  FROM all_vapex a
+  LEFT JOIN pivot_vapex p USING (vapex)
+),
+total_row AS (
+  SELECT
+    'TOTAL' AS vapex,
+    SUM(t1) AS t1,
+    SUM(t2) AS t2,
+    SUM(t3) AS t3
+  FROM rows_vapex
+)
+SELECT
+  vapex AS "VAPEX",
+  t1 AS "T1 (08-16)",
+  t2 AS "T2 (16-24)",
+  t3 AS "T3 (00-08)",
+  (t1 + t2 + t3) AS "Total"
+FROM (
+  SELECT * FROM rows_vapex
+  UNION ALL
+  SELECT * FROM total_row
+) x
+ORDER BY
+  CASE vapex
+    WHEN 'VAPEX 5' THEN 1
+    WHEN 'VAPEX 6' THEN 2
+    WHEN 'VAPEX 7' THEN 3
+    WHEN 'VAPEX 8' THEN 4
+    WHEN 'VAPEX 9' THEN 5
+    WHEN 'TOTAL' THEN 6
+    ELSE 99
+  END;
+"""
+QUERY_DESINF_VINC_8H = """
+WITH ref AS (
+  SELECT
+  (
+    date_trunc('day', now() AT TIME ZONE 'Europe/Lisbon') + interval '8 hours'
+  ) AT TIME ZONE 'Europe/Lisbon' AS ref_ts
+),
+last_values AS (
+    SELECT DISTINCT ON (silo_id)
+        silo_id,
+        qtd_silo
+    FROM mov_granulados.silos, ref
+    WHERE silo_id BETWEEN 1 AND 6
+      AND created_at <= ref.ref_ts + interval '5 minutes'
+    ORDER BY silo_id, created_at DESC
+)
+SELECT
+    COALESCE(MAX(qtd_silo) FILTER (WHERE silo_id = 1), 0) AS "SILO 1: 3A7 CS",
+    COALESCE(MAX(qtd_silo) FILTER (WHERE silo_id = 2), 0) AS "SILO 2: 2A3 CS",
+    COALESCE(MAX(qtd_silo) FILTER (WHERE silo_id = 3), 0) AS "SILO 3: 1A2 CS",
+    COALESCE(MAX(qtd_silo) FILTER (WHERE silo_id = 4), 0) AS "SILO 4: 05A1 CS",
+    COALESCE(MAX(qtd_silo) FILTER (WHERE silo_id = 5), 0) AS "SILO 5: 1A2 VINC",
+    COALESCE(MAX(qtd_silo) FILTER (WHERE silo_id = 6), 0) AS "SILO 6: 05A1 VINC"
+FROM last_values;
 """
