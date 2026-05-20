@@ -383,7 +383,8 @@ def build_calibracao_oee_block(rows: list[dict[str, object]]) -> ReportTableBloc
         for col in ["T1 (06-14)", "T2 (14-22)", "T3 (22-06)", "Dia"]:
             raw_value = float(row.get(col, 0) or 0)
 
-            if indicador == "Tempo Trabalho sem granulado":
+            # if indicador == "Tempo Trabalho sem granulado":
+            if indicador in ["Tempo Trabalho sem granulado", "Tempo Secção Desligada"]:
                 formatted_row[col] = format_seconds_hhmmss(raw_value)
                 formatted_row["_styles"][col] = get_tempo_sem_granulado_style(raw_value)
             else:

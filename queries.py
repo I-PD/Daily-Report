@@ -1162,7 +1162,13 @@ time_by_shift AS (
         WHEN d.algum_rotex_on = 1 AND d.algum_silo_vazar = 0
         THEN d.dur_s ELSE 0
       END
-    ), 0) AS tempo_sem_granulado_s
+    ), 0) AS tempo_sem_granulado_s,
+    COALESCE(SUM(
+      CASE
+        WHEN d.algum_rotex_on = 0
+        THEN d.dur_s ELSE 0
+      END
+    ), 0) AS tempo_seccao_desligada_s
   FROM shifts sh
   LEFT JOIN durations d
     ON d.turno_id = sh.turno_id
@@ -1176,6 +1182,7 @@ kpis AS (
     t.planned_s,
     t.tempo_produtivo_s,
     t.tempo_sem_granulado_s,
+    t.tempo_seccao_desligada_s,
     CASE
       WHEN t.planned_s > 0
         THEN 100.0 * GREATEST(t.planned_s - t.tempo_sem_granulado_s, 0) / t.planned_s
@@ -1203,7 +1210,8 @@ kpis_day AS (
         THEN 100.0 * SUM(kg_produzidos) / ((SUM(tempo_produtivo_s) / 3600.0) * MAX(po.cadencia_kg_h))
       ELSE 0
     END AS performance_dia,
-    SUM(tempo_sem_granulado_s) AS tempo_sem_granulado_dia
+    SUM(tempo_sem_granulado_s) AS tempo_sem_granulado_dia,
+    SUM(tempo_seccao_desligada_s) AS tempo_seccao_desligada_dia
   FROM kpis
   CROSS JOIN params_oee po
 ),
@@ -1223,7 +1231,11 @@ pivot AS (
 
     COALESCE(MAX(tempo_sem_granulado_s) FILTER (WHERE turno_id = 1), 0) AS tempo_t1,
     COALESCE(MAX(tempo_sem_granulado_s) FILTER (WHERE turno_id = 2), 0) AS tempo_t2,
-    COALESCE(MAX(tempo_sem_granulado_s) FILTER (WHERE turno_id = 3), 0) AS tempo_t3
+    COALESCE(MAX(tempo_sem_granulado_s) FILTER (WHERE turno_id = 3), 0) AS tempo_t3,
+
+    COALESCE(MAX(tempo_seccao_desligada_s) FILTER (WHERE turno_id = 1), 0) AS desligada_t1,
+    COALESCE(MAX(tempo_seccao_desligada_s) FILTER (WHERE turno_id = 2), 0) AS desligada_t2,
+    COALESCE(MAX(tempo_seccao_desligada_s) FILTER (WHERE turno_id = 3), 0) AS desligada_t3
   FROM kpis
 )
 SELECT
@@ -1268,6 +1280,16 @@ SELECT
   ROUND(tempo_t2, 0) AS "T2 (14-22)",
   ROUND(tempo_t3, 0) AS "T3 (22-06)",
   ROUND((SELECT tempo_sem_granulado_dia FROM kpis_day), 0) AS "Dia"
+FROM pivot
+
+UNION ALL
+
+SELECT
+  'Tempo Secção Desligada' AS "Indicador",
+  ROUND(desligada_t1, 0) AS "T1 (06-14)",
+  ROUND(desligada_t2, 0) AS "T2 (14-22)",
+  ROUND(desligada_t3, 0) AS "T3 (22-06)",
+  ROUND((SELECT tempo_seccao_desligada_dia FROM kpis_day), 0) AS "Dia"
 FROM pivot;
 """
 QUERY_DESINF_TRIT_DIA_ANTERIOR="""
