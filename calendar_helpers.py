@@ -51,7 +51,11 @@ def previous_operational_day(now):
     candidate = now.date() - timedelta(days=1)
 
     while True:
-        candidate_dt = datetime.combine(candidate, dt_time(0, 0), tzinfo=TZ)
+        candidate_dt = datetime.combine(
+            candidate, 
+            dt_time(0, 0), 
+            tzinfo=TZ
+        )
 
         if is_operational_day(candidate_dt):
             return candidate

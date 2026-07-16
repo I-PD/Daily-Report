@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 import smtplib
 from dataclasses import dataclass
-from datetime import datetime, timedelta, time as dt_time
+from datetime import date, datetime, timedelta, time as dt_time
 from email.message import EmailMessage
 from email.utils import formatdate
 from pathlib import Path
@@ -169,7 +169,6 @@ def get_report_date() -> datetime:
 
     passa a procurar o último dia operacional anterior,
     ignorando:
-    - sábados
     - domingos
     - feriados/férias definidos no .env
     """
@@ -272,6 +271,116 @@ def run_multi_row_query(query: str, params: dict | None = None) -> list[dict[str
         raise RuntimeError("A query multi-linha não devolveu resultados.")
 
     return [dict(row) for row in rows]
+
+def has_production_for_date(report_day: date) -> bool:
+    """
+    Deteta se existiu produção num sábado ou feriado.
+
+    São considerados:
+    - kg da Trituração;
+    - kg da Desinfeção Trituração;
+    - kg da Calibração.
+
+    O limiar mínimo pode ser configurado através de:
+    EXCEPTIONAL_DAY_MIN_KG
+    """
+    params = {
+        "report_date": report_day,
+    }
+
+    min_kg = float(
+        os.environ.get("EXCEPTIONAL_DAY_MIN_KG", "1")
+    )
+
+    # Produção da Trituração
+    trituracao = run_single_row_query(
+        QUERY_KGS_SILOS,
+        params,
+    )
+
+    # Produção da Desinfeção Trituração
+    desinfecao = run_single_row_query(
+        QUERY_DESINF_TRIT_KGS_SILOS_DIA_ANTERIOR,
+        params,
+    )
+
+    # Produção da Calibração
+    try:
+        calibracao_rows = run_multi_row_query(
+            QUERY_CALIB_GRANULADO_DIA_ANTERIOR,
+            params,
+        )
+    except RuntimeError:
+        calibracao_rows = []
+
+    calibracao_total = next(
+        (
+            float(row.get("Total (Kg)", 0) or 0)
+            for row in calibracao_rows
+            if str(row.get("produto", "")).strip().lower()
+            == "total"
+        ),
+        0.0,
+    )
+
+    total_kg = (
+        float(trituracao.get("TOTAL", 0) or 0)
+        + float(desinfecao.get("TOTAL", 0) or 0)
+        + calibracao_total
+    )
+
+    print(
+        f"Produção detetada em {report_day:%d/%m/%Y}: "
+        f"{total_kg:.0f} kg "
+        f"(limiar {min_kg:.0f} kg)."
+    )
+
+    return total_kg >= min_kg
+
+def get_report_days_to_send(now: datetime) -> list[date]:
+    """
+    Devolve as datas que devem originar e-mail nesta execução.
+
+    Exemplo numa segunda-feira:
+    - sexta-feira é sempre o relatório normal;
+    - sábado é acrescentado apenas se houve produção;
+    - domingo é ignorado.
+
+    Também permite detetar produção excecional em feriados
+    ou dias de férias definidos no .env.
+    """
+    standard_day = previous_operational_day(now)
+
+    report_days = [standard_day]
+
+    # Começa no dia seguinte ao último dia útil normal.
+    candidate = standard_day + timedelta(days=1)
+
+    # Percorre os dias até ao dia atual, sem incluir hoje.
+    while candidate < now.date():
+        candidate_dt = datetime.combine(
+            candidate,
+            dt_time(0, 0),
+            tzinfo=TZ,
+        )
+
+        # Ignora domingo.
+        # Verifica sábado, feriados ou dias de férias.
+        is_exceptional_candidate = (
+            candidate.weekday() != 6
+            and not is_operational_day(candidate_dt)
+        )
+
+        if (
+            is_exceptional_candidate
+            and has_production_for_date(candidate)
+        ):
+            report_days.append(candidate)
+
+        candidate += timedelta(days=1)
+
+    # Remove possíveis duplicados e ordena cronologicamente.
+    return sorted(set(report_days))
 
 # Construção dos blocos do relatório
 def build_standard_block(key: str, title: str, values: dict[str, object]) -> MetricBlock:
@@ -510,7 +619,11 @@ def build_desinf_vinc_silos_8h_block(values: dict[str, object]) -> ReportTableBl
 
     return ReportTableBlock(
         key="desinf_vinc_silos_8h",
-        title=f"Peso Silos Desinfeção VINC às 8h ({get_today_local_date()})",
+        #title=f"Peso Silos Desinfeção VINC às 8h ({get_today_local_date()})",
+        title=(
+            "Peso Silos Desinfeção VINC às 8h "
+            f"({snapshot_label})"
+        ),
         headers=headers,
         rows=[row],
     )
@@ -605,19 +718,41 @@ def build_oee_block(values: dict[str, object]) -> MetricBlock:
 # 2) Separar os blocos por secção
 # 3) Devolver uma estrutura organizada para o PDF e para o e-mail
 def get_daily_sections(report_date: datetime) -> list[ReportSection]:
-    today_label = get_today_local_date()
+    #today_label = get_today_local_date()
     report_date_label = get_report_date().strftime("%d/%m/%Y")
+
+    # O estado dos silos é medido às 08h do dia seguinte.
+    # Exemplo:
+    # relatório sexta -> sábado às 08h
+    snapshot_label = (
+        report_date + timedelta(days=1)
+    ).strftime("%d/%m/%Y")
 
     query_params = {
         "report_date": report_date.date()
     }
 
     # Secção: Trituração
-    total_silos_8h = run_scalar_query(QUERY_TRIT_TOTAL_SILOS_8H)
-    tempo_values = run_single_row_query(QUERY_TEMPO_PRODUCAO_MD, query_params)
-    horas_values = run_single_row_query(QUERY_HORAS_MOINHOS, query_params)
-    kgs_values = run_single_row_query(QUERY_KGS_SILOS, query_params)
-    oee_values = run_single_row_query(QUERY_OEE, query_params)
+    total_silos_8h = run_scalar_query(
+        QUERY_TRIT_TOTAL_SILOS_8H,
+        query_params,
+    )
+    tempo_values = run_single_row_query(
+        QUERY_TEMPO_PRODUCAO_MD, 
+        query_params,
+    )
+    horas_values = run_single_row_query(
+        QUERY_HORAS_MOINHOS, 
+        query_params,
+    )
+    kgs_values = run_single_row_query(
+        QUERY_KGS_SILOS, 
+        query_params,
+    )
+    oee_values = run_single_row_query(
+        QUERY_OEE, 
+        query_params,
+    )
 
     trituracao_blocks = [
         build_standard_block(
@@ -637,7 +772,7 @@ def get_daily_sections(report_date: datetime) -> list[ReportSection]:
         ),
         build_oee_block(oee_values),
         build_single_total_block(
-            f"Total Silos AD 1 a 5 às 8h ({today_label})",
+            f"Total Silos AD 1 a 5 às 8h ({snapshot_label})",
             total_silos_8h,
         ),
     ]
@@ -649,7 +784,8 @@ def get_daily_sections(report_date: datetime) -> list[ReportSection]:
     )
 
     desinf_total_silos_8h = run_scalar_query(
-        QUERY_DESINF_TRIT_TOTAL_SILOS_8H
+        QUERY_DESINF_TRIT_TOTAL_SILOS_8H,
+        query_params,
     )
 
     desinf_trit_rows = run_multi_row_query(
@@ -664,7 +800,7 @@ def get_daily_sections(report_date: datetime) -> list[ReportSection]:
             desinf_kgs_values,
         ),
         build_single_total_block(
-            f"Total Silos PD 6 a 10 às 8h ({today_label})",
+            f"Total Silos PD 6 a 10 às 8h ({snapshot_label})",
             desinf_total_silos_8h,
         ),
         build_desinf_trit_desinfecoes_block(desinf_trit_rows),
@@ -689,6 +825,7 @@ def get_daily_sections(report_date: datetime) -> list[ReportSection]:
     # Secção: Desinfeção VINC
     desinf_vinc_silos_values = run_single_vinc_row_query(
         QUERY_DESINF_VINC_8H,
+        query_params,
     )
     
     desinf_vinc_rows = run_multi_row_query(
@@ -698,7 +835,10 @@ def get_daily_sections(report_date: datetime) -> list[ReportSection]:
 
     desinf_vinc_blocks = [
         build_desinf_vinc_desinfecoes_block(desinf_vinc_rows),
-        build_desinf_vinc_silos_8h_block(desinf_vinc_silos_values),
+        build_desinf_vinc_silos_8h_block(
+            desinf_vinc_silos_values,
+            snapshot_label,
+            ),
     ]
 
     # Resultado final
@@ -863,51 +1003,158 @@ def send_email(subject: str, html_body: str, text_body: str, attachments: list[P
         server.send_message(msg)
 
 # Função principal
+# def main() -> None:
+#     """
+#     Fluxo principal:
+#     1) calcula data do report
+#     2) vai buscar os blocos
+#     3) renderiza HTML do PDF
+#     4) renderiza HTML do e-mail (separado, mais simples)
+#     5) guarda HTML de debug do PDF
+#     6) gera PDF
+#     7) envia por e-mail
+#     """
+#     now = datetime.now(TZ)
+
+#     if not is_operational_day(now):
+#         print("Dia não operacional. Report não enviado.")
+#         return
+
+#     report_date = get_report_date()
+#     #Usam-se secções, não uma lista única de blocos
+#     sections = get_daily_sections(report_date)
+
+#     pdf_html = render_html(report_date, sections)
+#     # email_html = render_email_html(report_date, sections)
+#     email_html = build_email_html(report_date)
+
+#     #debug_html_path = export_debug_html(pdf_html, report_date)
+#     pdf_path = export_pdf(pdf_html, report_date)
+
+#     if os.environ.get("SEND_EMAIL", "true").lower() == "true":
+#         send_email(
+#             subject=f"Relatório Diário Granulados - {report_date.strftime('%d/%m/%Y')}",
+#             html_body=email_html,
+#             text_body=build_plain_text(report_date),
+#             attachments=[pdf_path],
+#         )
+#         print("E-mail enviado com sucesso.")
+#     else:
+#         print("SEND_EMAIL=false, e-mail não enviado.")
+
+#     print(f"PDF criado: {pdf_path}")
+
+#     # Apaga o PDF no fim, mesmo que o envio falhe parcialmente
+#     if pdf_path and pdf_path.exists():
+#         pdf_path.unlink()
+#         print(f"PDF apagado: {pdf_path}")
+
 def main() -> None:
     """
-    Fluxo principal:
-    1) calcula data do report
-    2) vai buscar os blocos
-    3) renderiza HTML do PDF
-    4) renderiza HTML do e-mail (separado, mais simples)
-    5) guarda HTML de debug do PDF
-    6) gera PDF
-    7) envia por e-mail
+    Gera:
+    - o relatório normal do último dia útil;
+    - relatórios adicionais de sábados ou feriados
+      quando for detetada produção.
     """
     now = datetime.now(TZ)
 
+    # O cron deve executar apenas em dias úteis.
     if not is_operational_day(now):
-        print("Dia não operacional. Report não enviado.")
+        print(
+            "Dia não operacional. "
+            "Report não enviado."
+        )
         return
 
-    report_date = get_report_date()
-    #Usam-se secções, não uma lista única de blocos
-    sections = get_daily_sections(report_date)
+    report_days = get_report_days_to_send(now)
 
-    pdf_html = render_html(report_date, sections)
-    # email_html = render_email_html(report_date, sections)
-    email_html = build_email_html(report_date)
+    errors: list[str] = []
 
-    #debug_html_path = export_debug_html(pdf_html, report_date)
-    pdf_path = export_pdf(pdf_html, report_date)
-
-    if os.environ.get("SEND_EMAIL", "true").lower() == "true":
-        send_email(
-            subject=f"Relatório Diário Granulados - {report_date.strftime('%d/%m/%Y')}",
-            html_body=email_html,
-            text_body=build_plain_text(report_date),
-            attachments=[pdf_path],
+    for report_day in report_days:
+        report_date = datetime.combine(
+            report_day,
+            dt_time(0, 0),
+            tzinfo=TZ,
         )
-        print("E-mail enviado com sucesso.")
-    else:
-        print("SEND_EMAIL=false, e-mail não enviado.")
 
-    print(f"PDF criado: {pdf_path}")
+        pdf_path: Path | None = None
 
-    # Apaga o PDF no fim, mesmo que o envio falhe parcialmente
-    if pdf_path and pdf_path.exists():
-        pdf_path.unlink()
-        print(f"PDF apagado: {pdf_path}")
+        try:
+            print(
+                "A gerar relatório de "
+                f"{report_day:%d/%m/%Y}..."
+            )
+
+            sections = get_daily_sections(
+                report_date
+            )
+
+            pdf_html = render_html(
+                report_date,
+                sections,
+            )
+
+            email_html = build_email_html(
+                report_date
+            )
+
+            pdf_path = export_pdf(
+                pdf_html,
+                report_date,
+            )
+
+            send_email_enabled = (
+                os.environ
+                .get("SEND_EMAIL", "true")
+                .lower()
+                == "true"
+            )
+
+            if send_email_enabled:
+                send_email(
+                    subject=(
+                        "Relatório Diário Granulados - "
+                        f"{report_date:%d/%m/%Y}"
+                    ),
+                    html_body=email_html,
+                    text_body=build_plain_text(
+                        report_date
+                    ),
+                    attachments=[pdf_path],
+                )
+
+                print(
+                    "E-mail de "
+                    f"{report_day:%d/%m/%Y} "
+                    "enviado com sucesso."
+                )
+            else:
+                print(
+                    "SEND_EMAIL=false, "
+                    "e-mail não enviado."
+                )
+
+            print(f"PDF criado: {pdf_path}")
+
+        except Exception as exc:
+            error = (
+                "Falha no relatório de "
+                f"{report_day:%d/%m/%Y}: {exc}"
+            )
+
+            print(error)
+            errors.append(error)
+
+        finally:
+            # Apaga o PDF mesmo que o envio de e-mail falhe.
+            if pdf_path and pdf_path.exists():
+                pdf_path.unlink()
+                print(f"PDF apagado: {pdf_path}")
+
+    if errors:
+        raise RuntimeError(
+            " | ".join(errors)
+        )
 
 if __name__ == "__main__":
     main()

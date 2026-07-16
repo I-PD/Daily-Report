@@ -559,7 +559,8 @@ QUERY_TRIT_TOTAL_SILOS_8H = """
 WITH ref AS (
     SELECT
         (
-            date_trunc('day', now() AT TIME ZONE 'Europe/Lisbon')
+            %(report_date)s::date
+            + interval '1 day'
             + interval '8 hours'
         ) AT TIME ZONE 'Europe/Lisbon' AS ref_ts
 )
@@ -669,7 +670,8 @@ QUERY_DESINF_TRIT_TOTAL_SILOS_8H = """
 WITH ref AS (
     SELECT
         (
-            date_trunc('day', now() AT TIME ZONE 'Europe/Lisbon')
+            %(report_date)s::date
+            + interval '1 day'
             + interval '8 hours'
         ) AT TIME ZONE 'Europe/Lisbon' AS ref_ts
 )
@@ -1487,7 +1489,9 @@ QUERY_DESINF_VINC_8H = """
 WITH ref AS (
   SELECT
   (
-    date_trunc('day', now() AT TIME ZONE 'Europe/Lisbon') + interval '8 hours'
+    %(report_date)s::date
+    + interval '1 day'
+    + interval '8 hours'
   ) AT TIME ZONE 'Europe/Lisbon' AS ref_ts
 ),
 last_values AS (
@@ -1500,11 +1504,35 @@ last_values AS (
     ORDER BY silo_id, created_at DESC
 )
 SELECT
-    COALESCE(MAX(qtd_silo) FILTER (WHERE silo_id = 1), 0) AS "SILO 1: 3A7 CS",
-    COALESCE(MAX(qtd_silo) FILTER (WHERE silo_id = 2), 0) AS "SILO 2: 2A3 CS",
-    COALESCE(MAX(qtd_silo) FILTER (WHERE silo_id = 3), 0) AS "SILO 3: 1A2 CS",
-    COALESCE(MAX(qtd_silo) FILTER (WHERE silo_id = 4), 0) AS "SILO 4: 05A1 CS",
-    COALESCE(MAX(qtd_silo) FILTER (WHERE silo_id = 5), 0) AS "SILO 5: 1A2 VINC",
-    COALESCE(MAX(qtd_silo) FILTER (WHERE silo_id = 6), 0) AS "SILO 6: 05A1 VINC"
+    COALESCE(
+        MAX(qtd_silo) FILTER (WHERE silo_id = 1), 
+        0
+    ) AS "SILO 1: 3A7 CS",
+
+    COALESCE(
+        MAX(qtd_silo) FILTER (WHERE silo_id = 2), 
+        0
+    ) AS "SILO 2: 2A3 CS",
+
+    COALESCE(
+        MAX(qtd_silo) FILTER (WHERE silo_id = 3), 
+        0
+    ) AS "SILO 3: 1A2 CS",
+
+    COALESCE(
+        MAX(qtd_silo) FILTER (WHERE silo_id = 4), 
+        0
+    ) AS "SILO 4: 05A1 CS",
+
+    COALESCE(
+        MAX(qtd_silo) FILTER (WHERE silo_id = 5), 
+        0
+    ) AS "SILO 5: 1A2 VINC",
+
+    COALESCE(
+        MAX(qtd_silo) FILTER (WHERE silo_id = 6), 
+        0
+    ) AS "SILO 6: 05A1 VINC"
+    
 FROM last_values;
 """
