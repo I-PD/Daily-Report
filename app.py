@@ -592,7 +592,10 @@ def build_desinf_trit_desinfecoes_block(rows: list[dict[str, object]]) -> Report
     )
 
 # Builder Desinfeção VINC - Total Silos às 8h
-def build_desinf_vinc_silos_8h_block(values: dict[str, object]) -> ReportTableBlock:
+def build_desinf_vinc_silos_8h_block(
+        values: dict[str, object],
+        snapshot_label: str,
+) -> ReportTableBlock:
     headers = [
         "SILO 1: 3A7 CS",
         "SILO 2: 2A3 CS",
