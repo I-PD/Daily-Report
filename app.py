@@ -871,7 +871,7 @@ def build_oee_block(values: dict[str, object]) -> MetricBlock:
 def get_daily_sections(conn, report_date: datetime) -> list[ReportSection]:
     #today_label = get_today_local_date()
     # report_date_label = get_report_date().strftime("%d/%m/%Y")
-    report_date_label = report_date().strftime("%d/%m/%Y")
+    report_date_label = report_date.strftime("%d/%m/%Y")
 
     # O estado dos silos é medido às 08h do dia seguinte.
     # Exemplo:
