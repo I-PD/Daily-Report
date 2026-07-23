@@ -11,12 +11,13 @@ from __future__ import annotations
 
 import os
 import smtplib
+import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, time as dt_time
 from email.message import EmailMessage
 from email.utils import formatdate
 from pathlib import Path
-from calendar_helpers import TZ, is_operational_day, previous_operational_day
+from calendar_helpers import TZ, is_operational_day, previous_operational_day, is_operational_date
 
 from dotenv import load_dotenv
 from jinja2 import Environment, FileSystemLoader
@@ -25,6 +26,7 @@ from psycopg2.extras import RealDictCursor
 from playwright.sync_api import sync_playwright
 
 from queries import (
+    QUERY_HAS_REPORT_ACTIVITY,
     QUERY_TEMPO_PRODUCAO_MD,
     QUERY_HORAS_MOINHOS,
     QUERY_KGS_SILOS,
@@ -159,44 +161,104 @@ def default_card_style(is_total: bool) -> tuple[str, str]:
     return "#d9d9e3", "#111111"
 
 # Regras de data do relatório
-def get_report_date() -> datetime:
+def get_previous_calendar_day(now: datetime) -> date:
     """
-    Define a data de referência do relatório.
-
-    Em vez de assumir:
-    - segunda -> sexta
-    - outros dias -> ontem
-
-    passa a procurar o último dia operacional anterior,
-    ignorando:
-    - domingos
-    - feriados/férias definidos no .env
+    O relatório de cada execução corresponde sempre
+    ao dia civil anterior.
     """
-    now = datetime.now(TZ)
-    report_day = previous_operational_day(now)
+    return now.date() - timedelta(days=1)
 
-    return datetime.combine(report_day, dt_time(0, 0), tzinfo=TZ)
+# def get_report_date() -> datetime:
+#     """
+#     Define a data de referência do relatório.
 
-def get_today_local_date() -> str:
+#     Em vez de assumir:
+#     - segunda -> sexta
+#     - outros dias -> ontem
+
+#     passa a procurar o último dia operacional anterior,
+#     ignorando:
+#     - domingos
+#     - feriados/férias definidos no .env
+#     """
+#     now = datetime.now(TZ)
+#     report_day = previous_operational_day(now)
+
+#     return datetime.combine(report_day, dt_time(0, 0), tzinfo=TZ)
+
+def get_report_ready_at(report_day: date) -> datetime:
     """
-    Devolve a data local de hoje em formato dd/mm/YYYY.
+    Hora a partir da qual o relatório pode ser gerado.
+
+    O turno mais tardio termina às 08:00 do dia seguinte.
+    Por defeito esperamos até às 08:15.
     """
-    return datetime.now(TZ).strftime("%d/%m/%Y")
+    ready_hour = int(
+        os.environ.get("REPORT_READY_HOUR", "8")
+    )
+
+    ready_minute = int(
+        os.environ.get("REPORT_READY_MINUTE", "15")
+    )
+
+    return datetime.combine(
+        report_day + timedelta(days=1),
+        dt_time(ready_hour, ready_minute),
+        tzinfo=TZ,
+    )
+
+def is_report_ready(now: datetime, report_day: date,) -> bool:
+    return now >= get_report_ready_at(report_day)
+
+# def get_today_local_date() -> str:
+#     """
+#     Devolve a data local de hoje em formato dd/mm/YYYY.
+#     """
+#     return datetime.now(TZ).strftime("%d/%m/%Y")
 
 # Ligação à base de dados
 def get_db_connection():
     """
-    Abre ligação à base de dados PostgreSQL usando as
-    variáveis definidas no .env.
+    Abre uma ligação de leitura para todo o relatório.
     """
-    return psycopg2.connect(
+    conn = psycopg2.connect(
         host=os.environ["DB_HOST"],
         port=int(os.environ.get("DB_PORT", "5432")),
         dbname=os.environ["DB_NAME"],
         user=os.environ["DB_USER"],
         password=os.environ["DB_PASSWORD"],
         cursor_factory=RealDictCursor,
+        connect_timeout=int(
+            os.environ.get("DB_CONNECT_TIMEOUT_SECONDS", "15")
+        ),
+        application_name="csp4_daily_report",
+        options=(
+            "-c statement_timeout="
+            + os.environ.get(
+                "DB_STATEMENT_TIMEOUT_MS",
+                "120000",
+            )
+        ),
     )
+
+    # Cada SELECT é independente.
+    # Uma falha não deixa a ligação numa transação abortada.
+    conn.autocommit = True
+
+    return conn
+# def get_db_connection():
+#     """
+#     Abre ligação à base de dados PostgreSQL usando as
+#     variáveis definidas no .env.
+#     """
+#     return psycopg2.connect(
+#         host=os.environ["DB_HOST"],
+#         port=int(os.environ.get("DB_PORT", "5432")),
+#         dbname=os.environ["DB_NAME"],
+#         user=os.environ["DB_USER"],
+#         password=os.environ["DB_PASSWORD"],
+#         cursor_factory=RealDictCursor,
+#     )
 
 #  Formatação de valores dentro das células
 # Passar de segundos para formato horas:minutos
@@ -228,8 +290,56 @@ def format_pct(value: object) -> str:
         return "0 %"
     return f"{float(value):.1f} %"
 
+def execute_query(conn, query_name: str, query: str, params: dict | None, fetch_mode: str,):
+    """
+    Executa uma query com retry simples e identifica
+    claramente qual query falhou.
+    """
+    max_attempts = int(
+        os.environ.get("REPORT_QUERY_ATTEMPTS", "2")
+    )
+
+    retry_seconds = int(
+        os.environ.get("REPORT_QUERY_RETRY_SECONDS", "5")
+    )
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            with conn.cursor() as cur:
+                cur.execute(query, params or {})
+
+                if fetch_mode == "one":
+                    return cur.fetchone()
+
+                if fetch_mode == "all":
+                    return cur.fetchall()
+
+                raise ValueError(
+                    f"fetch_mode inválido: {fetch_mode}"
+                )
+
+        except psycopg2.Error as exc:
+            print(
+                f"[ERRO SQL] {query_name} falhou "
+                f"na tentativa {attempt}/{max_attempts}: "
+                f"{exc}",
+                flush=True,
+            )
+
+            if attempt >= max_attempts:
+                raise RuntimeError(
+                    f"Query {query_name!r} falhou "
+                    f"após {max_attempts} tentativas."
+                ) from exc
+
+            time.sleep(retry_seconds)
+
+    raise RuntimeError(
+        f"Query {query_name!r} terminou sem resultado."
+    )
+
 # Execução genérica de queries
-def run_single_row_query(query: str, params: dict | None = None) -> dict[str, object]:
+def run_single_row_query(conn, query_name: str, query: str, params: dict | None = None) -> dict[str, object]:
     """
     Executa uma query que deve devolver apenas UMA linha,
     com colunas do tipo:
@@ -243,36 +353,41 @@ def run_single_row_query(query: str, params: dict | None = None) -> dict[str, ob
             "TOTAL": "11h24 (39%)",
         }
     """
-    with get_db_connection() as conn:
-        with conn.cursor() as cur:
-            if params:
-                cur.execute(query, params)
-            else:
-                cur.execute(query)
-            row = cur.fetchone()
+    row = execute_query(conn=conn,query_name=query_name,query=query,params=params,fetch_mode="one",)
+
+    # with get_db_connection() as conn:
+    #     with conn.cursor() as cur:
+    #         if params:
+    #             cur.execute(query, params)
+    #         else:
+    #             cur.execute(query)
+    #         row = cur.fetchone()
 
     if not row:
-        raise RuntimeError("A query não devolveu resultados.")
+        #raise RuntimeError("A query não devolveu resultados.")
+        raise RuntimeError(f"A query {query_name!r} não devolveu resultados.")
 
     ordered_labels = ["T1(08-16)", "T2(16-24)", "T3(00-08)", "TOTAL"]
-    return {label: row.get(label) for label in ordered_labels if label in row}
+    return {label: row.get(label) for label in ordered_labels}
 
 # Execução genérica de queries com várias linhas
-def run_multi_row_query(query: str, params: dict | None = None) -> list[dict[str, object]]:
-    with get_db_connection() as conn:
-        with conn.cursor() as cur:
-            if params:
-                cur.execute(query, params)
-            else:
-                cur.execute(query)
-            rows = cur.fetchall()
+def run_multi_row_query(conn, query_name: str,query: str, params: dict | None = None) -> list[dict[str, object]]:
+    # with get_db_connection() as conn:
+    #     with conn.cursor() as cur:
+    #         if params:
+    #             cur.execute(query, params)
+    #         else:
+    #             cur.execute(query)
+    #         rows = cur.fetchall()
+    rows = execute_query(conn=conn,query_name=query_name,query=query,params=params,fetch_mode="all",)
 
     if not rows:
-        raise RuntimeError("A query multi-linha não devolveu resultados.")
+        # raise RuntimeError("A query multi-linha não devolveu resultados.")
+        raise RuntimeError(f"A query {query_name!r} não devolveu resultados.")
 
     return [dict(row) for row in rows]
 
-def has_production_for_date(report_day: date) -> bool:
+def has_production_for_date(conn, report_day: date) -> bool:
     """
     Deteta se existiu produção num sábado ou feriado.
 
@@ -292,95 +407,121 @@ def has_production_for_date(report_day: date) -> bool:
         os.environ.get("EXCEPTIONAL_DAY_MIN_KG", "1")
     )
 
-    # Produção da Trituração
-    trituracao = run_single_row_query(
-        QUERY_KGS_SILOS,
-        params,
+    row = run_single_vinc_row_query(
+        conn=conn,
+        query_name="has_report_activity",
+        query=QUERY_HAS_REPORT_ACTIVITY,
+        params={
+            "report_date": report_day,
+            "min_activity_kg": min_kg,
+        },
     )
 
-    # Produção da Desinfeção Trituração
-    desinfecao = run_single_row_query(
-        QUERY_DESINF_TRIT_KGS_SILOS_DIA_ANTERIOR,
-        params,
-    )
+    has_production = bool(row.get("has_production", False))
 
-    # Produção da Calibração
-    try:
-        calibracao_rows = run_multi_row_query(
-            QUERY_CALIB_GRANULADO_DIA_ANTERIOR,
-            params,
-        )
-    except RuntimeError:
-        calibracao_rows = []
+    print(f"[INFO] Atividade em "f"{report_day:%d/%m/%Y}: "f"{has_production}",flush=True,)
 
-    calibracao_total = next(
-        (
-            float(row.get("Total (Kg)", 0) or 0)
-            for row in calibracao_rows
-            if str(row.get("produto", "")).strip().lower()
-            == "total"
-        ),
-        0.0,
-    )
+    return has_production
 
-    total_kg = (
-        float(trituracao.get("TOTAL", 0) or 0)
-        + float(desinfecao.get("TOTAL", 0) or 0)
-        + calibracao_total
-    )
+    # # Produção da Trituração
+    # trituracao = run_single_row_query(
+    #     QUERY_KGS_SILOS,
+    #     params,
+    # )
 
-    print(
-        f"Produção detetada em {report_day:%d/%m/%Y}: "
-        f"{total_kg:.0f} kg "
-        f"(limiar {min_kg:.0f} kg)."
-    )
+    # # Produção da Desinfeção Trituração
+    # desinfecao = run_single_row_query(
+    #     QUERY_DESINF_TRIT_KGS_SILOS_DIA_ANTERIOR,
+    #     params,
+    # )
 
-    return total_kg >= min_kg
+    # # Produção da Calibração
+    # try:
+    #     calibracao_rows = run_multi_row_query(
+    #         QUERY_CALIB_GRANULADO_DIA_ANTERIOR,
+    #         params,
+    #     )
+    # except RuntimeError:
+    #     calibracao_rows = []
 
-def get_report_days_to_send(now: datetime) -> list[date]:
+    # calibracao_total = next(
+    #     (
+    #         float(row.get("Total (Kg)", 0) or 0)
+    #         for row in calibracao_rows
+    #         if str(row.get("produto", "")).strip().lower()
+    #         == "total"
+    #     ),
+    #     0.0,
+    # )
+
+    # total_kg = (
+    #     float(trituracao.get("TOTAL", 0) or 0)
+    #     + float(desinfecao.get("TOTAL", 0) or 0)
+    #     + calibracao_total
+    # )
+
+    # print(
+    #     f"Produção detetada em {report_day:%d/%m/%Y}: "
+    #     f"{total_kg:.0f} kg "
+    #     f"(limiar {min_kg:.0f} kg)."
+    # )
+
+    # return total_kg >= min_kg
+
+def get_report_days_to_send(conn, now: datetime) -> list[date]:
     """
-    Devolve as datas que devem originar e-mail nesta execução.
+    Nesta execução só pode ser enviado um relatório:
+    o do dia civil anterior.
 
-    Exemplo numa segunda-feira:
-    - sexta-feira é sempre o relatório normal;
-    - sábado é acrescentado apenas se houve produção;
-    - domingo é ignorado.
-
-    Também permite detetar produção excecional em feriados
-    ou dias de férias definidos no .env.
+    Regras:
+    - dia útil normal: envia;
+    - sábado/domingo/HOLIDAYS: envia apenas se houve atividade.
     """
-    standard_day = previous_operational_day(now)
+    # standard_day = previous_operational_day(now)
+    # report_days = [standard_day]
 
-    report_days = [standard_day]
+    report_day = get_previous_calendar_day(now)
 
-    # Começa no dia seguinte ao último dia útil normal.
-    candidate = standard_day + timedelta(days=1)
+    if is_operational_date(report_day):
+        print(f"[INFO] {report_day:%d/%m/%Y} ""é um dia operacional normal.",flush=True,)
 
-    # Percorre os dias até ao dia atual, sem incluir hoje.
-    while candidate < now.date():
-        candidate_dt = datetime.combine(
-            candidate,
-            dt_time(0, 0),
-            tzinfo=TZ,
-        )
+        return [report_day]
 
-        # Ignora domingo.
-        # Verifica sábado, feriados ou dias de férias.
-        is_exceptional_candidate = (
-            candidate.weekday() != 6
-            and not is_operational_day(candidate_dt)
-        )
+    print(f"[INFO] {report_day:%d/%m/%Y} ""é fim de semana ou HOLIDAY. ""A verificar produção.",flush=True,)
 
-        if (
-            is_exceptional_candidate
-            and has_production_for_date(candidate)
-        ):
-            report_days.append(candidate)
+    if has_production_for_date(conn, report_day,):
+        return [report_day]
 
-        candidate += timedelta(days=1)
+    return []
 
-    # Remove possíveis duplicados e ordena cronologicamente.
-    return sorted(set(report_days))
+    # # Começa no dia seguinte ao último dia útil normal.
+    # candidate = standard_day + timedelta(days=1)
+
+    # # Percorre os dias até ao dia atual, sem incluir hoje.
+    # while candidate < now.date():
+    #     candidate_dt = datetime.combine(
+    #         candidate,
+    #         dt_time(0, 0),
+    #         tzinfo=TZ,
+    #     )
+
+    #     # Ignora domingo.
+    #     # Verifica sábado, feriados ou dias de férias.
+    #     is_exceptional_candidate = (
+    #         candidate.weekday() != 6
+    #         and not is_operational_day(candidate_dt)
+    #     )
+
+    #     if (
+    #         is_exceptional_candidate
+    #         and has_production_for_date(candidate)
+    #     ):
+    #         report_days.append(candidate)
+
+    #     candidate += timedelta(days=1)
+
+    # # Remove possíveis duplicados e ordena cronologicamente.
+    # return sorted(set(report_days))
 
 # Construção dos blocos do relatório
 def build_standard_block(key: str, title: str, values: dict[str, object]) -> MetricBlock:
@@ -632,40 +773,47 @@ def build_desinf_vinc_silos_8h_block(
     )
 
 # Builder de blocos com um único cartão grande (ex: Total Silos às 8h)
-def run_scalar_query(query: str, params: dict | None = None) -> object:
+def run_scalar_query(conn, query_name: str, query: str, params: dict | None = None) -> object:
     """
     Executa uma query que devolve uma única linha e uma única coluna.
     Exemplo:
         SELECT 123 AS "TOTAL"
     """
-    with get_db_connection() as conn:
-        with conn.cursor() as cur:
-            if params:
-                cur.execute(query, params)
-            else:
-                cur.execute(query)
-            row = cur.fetchone()
+
+    row = execute_query(conn=conn,query_name=query_name,query=query,params=params,fetch_mode="one",)
+
+    # with get_db_connection() as conn:
+    #     with conn.cursor() as cur:
+    #         if params:
+    #             cur.execute(query, params)
+    #         else:
+    #             cur.execute(query)
+    #         row = cur.fetchone()
 
     if not row:
-        raise RuntimeError("A query escalar não devolveu resultados.")
+        #raise RuntimeError("A query escalar não devolveu resultados.")
+        raise RuntimeError(f"A query {query_name!r} não devolveu resultados.")
 
     return next(iter(row.values()))
 
-def run_single_vinc_row_query(query: str, params: dict | None = None) -> dict[str, object]:
+def run_single_vinc_row_query(conn, query_name: str, query: str, params: dict | None = None) -> dict[str, object]:
     """
     Executa uma query de uma linha, mas devolve TODAS as colunas.
     Usar para tabelas que não têm T1/T2/T3/TOTAL.
     """
-    with get_db_connection() as conn:
-        with conn.cursor() as cur:
-            if params:
-                cur.execute(query, params)
-            else:
-                cur.execute(query)
-            row = cur.fetchone()
+    # with get_db_connection() as conn:
+    #     with conn.cursor() as cur:
+    #         if params:
+    #             cur.execute(query, params)
+    #         else:
+    #             cur.execute(query)
+    #         row = cur.fetchone()
+
+    row = execute_query(conn=conn,query_name=query_name,query=query,params=params,fetch_mode="one",)
 
     if not row:
-        raise RuntimeError("A query não devolveu resultados.")
+        # raise RuntimeError("A query não devolveu resultados.")
+        raise RuntimeError(f"A query {query_name!r} não devolveu resultados.")
 
     return dict(row)
 
@@ -720,9 +868,10 @@ def build_oee_block(values: dict[str, object]) -> MetricBlock:
 # 1) Executar as queries reais
 # 2) Separar os blocos por secção
 # 3) Devolver uma estrutura organizada para o PDF e para o e-mail
-def get_daily_sections(report_date: datetime) -> list[ReportSection]:
+def get_daily_sections(conn, report_date: datetime) -> list[ReportSection]:
     #today_label = get_today_local_date()
-    report_date_label = get_report_date().strftime("%d/%m/%Y")
+    # report_date_label = get_report_date().strftime("%d/%m/%Y")
+    report_date_label = report_date().strftime("%d/%m/%Y")
 
     # O estado dos silos é medido às 08h do dia seguinte.
     # Exemplo:
@@ -737,22 +886,32 @@ def get_daily_sections(report_date: datetime) -> list[ReportSection]:
 
     # Secção: Trituração
     total_silos_8h = run_scalar_query(
+        conn,
+        "trit_total_silos_8h",
         QUERY_TRIT_TOTAL_SILOS_8H,
         query_params,
     )
     tempo_values = run_single_row_query(
+        conn,
+        "tempo_producao_md",
         QUERY_TEMPO_PRODUCAO_MD, 
         query_params,
     )
     horas_values = run_single_row_query(
+        conn,
+        "horas_moinhos",
         QUERY_HORAS_MOINHOS, 
         query_params,
     )
     kgs_values = run_single_row_query(
+        conn,
+        "kgs_silos_1a5",
         QUERY_KGS_SILOS, 
         query_params,
     )
     oee_values = run_single_row_query(
+        conn,
+        "oee_trituracao",
         QUERY_OEE, 
         query_params,
     )
@@ -782,16 +941,22 @@ def get_daily_sections(report_date: datetime) -> list[ReportSection]:
 
     # Secção: Desinfeção Trituração
     desinf_kgs_values = run_single_row_query(
+        conn,
+        "desinf_kgs_silos_6a10",
         QUERY_DESINF_TRIT_KGS_SILOS_DIA_ANTERIOR,
         query_params,
     )
 
     desinf_total_silos_8h = run_scalar_query(
+        conn,
+        "desinf_total_silos_8h",
         QUERY_DESINF_TRIT_TOTAL_SILOS_8H,
         query_params,
     )
 
     desinf_trit_rows = run_multi_row_query(
+        conn,
+        "desinf_trit_desinfecoes",
         QUERY_DESINF_TRIT_DIA_ANTERIOR,
         query_params,
     )
@@ -811,11 +976,15 @@ def get_daily_sections(report_date: datetime) -> list[ReportSection]:
 
     # Secção: Calibração
     calibracao_rows = run_multi_row_query(
+        conn,
+        "calibracao_granulado",
         QUERY_CALIB_GRANULADO_DIA_ANTERIOR,
         query_params,
     )
 
     calibracao_oee_rows = run_multi_row_query(
+        conn,
+        "calibracao_oee",
         QUERY_CALIB_OEE_TABELA_DIA_ANTERIOR,
         query_params,
     )
@@ -827,11 +996,15 @@ def get_daily_sections(report_date: datetime) -> list[ReportSection]:
 
     # Secção: Desinfeção VINC
     desinf_vinc_silos_values = run_single_vinc_row_query(
+        conn,
+        "desinf_vinc_silos_8h",
         QUERY_DESINF_VINC_8H,
         query_params,
     )
     
     desinf_vinc_rows = run_multi_row_query(
+        conn,
+        "desinf_vinc_desinfecoes",
         QUERY_DESINF_VINC_DESINFECOES_DIA_ANTERIOR,
         query_params,
     )
@@ -1008,156 +1181,197 @@ def send_email(subject: str, html_body: str, text_body: str, attachments: list[P
 # Função principal
 # def main() -> None:
 #     """
-#     Fluxo principal:
-#     1) calcula data do report
-#     2) vai buscar os blocos
-#     3) renderiza HTML do PDF
-#     4) renderiza HTML do e-mail (separado, mais simples)
-#     5) guarda HTML de debug do PDF
-#     6) gera PDF
-#     7) envia por e-mail
+#     Gera:
+#     - o relatório normal do último dia útil;
+#     - relatórios adicionais de sábados ou feriados
+#       quando for detetada produção.
 #     """
 #     now = datetime.now(TZ)
 
+#     # O cron deve executar apenas em dias úteis.
 #     if not is_operational_day(now):
-#         print("Dia não operacional. Report não enviado.")
+#         print(
+#             "Dia não operacional. "
+#             "Report não enviado."
+#         )
 #         return
 
-#     report_date = get_report_date()
-#     #Usam-se secções, não uma lista única de blocos
-#     sections = get_daily_sections(report_date)
+#     report_days = get_report_days_to_send(now)
 
-#     pdf_html = render_html(report_date, sections)
-#     # email_html = render_email_html(report_date, sections)
-#     email_html = build_email_html(report_date)
+#     errors: list[str] = []
 
-#     #debug_html_path = export_debug_html(pdf_html, report_date)
-#     pdf_path = export_pdf(pdf_html, report_date)
-
-#     if os.environ.get("SEND_EMAIL", "true").lower() == "true":
-#         send_email(
-#             subject=f"Relatório Diário Granulados - {report_date.strftime('%d/%m/%Y')}",
-#             html_body=email_html,
-#             text_body=build_plain_text(report_date),
-#             attachments=[pdf_path],
+#     for report_day in report_days:
+#         report_date = datetime.combine(
+#             report_day,
+#             dt_time(0, 0),
+#             tzinfo=TZ,
 #         )
-#         print("E-mail enviado com sucesso.")
-#     else:
-#         print("SEND_EMAIL=false, e-mail não enviado.")
 
-#     print(f"PDF criado: {pdf_path}")
+#         pdf_path: Path | None = None
 
-#     # Apaga o PDF no fim, mesmo que o envio falhe parcialmente
-#     if pdf_path and pdf_path.exists():
-#         pdf_path.unlink()
-#         print(f"PDF apagado: {pdf_path}")
+#         try:
+#             print(
+#                 "A gerar relatório de "
+#                 f"{report_day:%d/%m/%Y}..."
+#             )
 
+#             sections = get_daily_sections(
+#                 report_date
+#             )
+
+#             pdf_html = render_html(
+#                 report_date,
+#                 sections,
+#             )
+
+#             email_html = build_email_html(
+#                 report_date
+#             )
+
+#             pdf_path = export_pdf(
+#                 pdf_html,
+#                 report_date,
+#             )
+
+#             send_email_enabled = (
+#                 os.environ
+#                 .get("SEND_EMAIL", "true")
+#                 .lower()
+#                 == "true"
+#             )
+
+#             if send_email_enabled:
+#                 send_email(
+#                     subject=(
+#                         "Relatório Diário Granulados - "
+#                         f"{report_date:%d/%m/%Y}"
+#                     ),
+#                     html_body=email_html,
+#                     text_body=build_plain_text(
+#                         report_date
+#                     ),
+#                     attachments=[pdf_path],
+#                 )
+
+#                 print(
+#                     "E-mail de "
+#                     f"{report_day:%d/%m/%Y} "
+#                     "enviado com sucesso."
+#                 )
+#             else:
+#                 print(
+#                     "SEND_EMAIL=false, "
+#                     "e-mail não enviado."
+#                 )
+
+#             print(f"PDF criado: {pdf_path}")
+
+#         except Exception as exc:
+#             error = (
+#                 "Falha no relatório de "
+#                 f"{report_day:%d/%m/%Y}: {exc}"
+#             )
+
+#             print(error)
+#             errors.append(error)
+
+#         finally:
+#             # Apaga o PDF mesmo que o envio de e-mail falhe.
+#             if pdf_path and pdf_path.exists():
+#                 pdf_path.unlink()
+#                 print(f"PDF apagado: {pdf_path}")
+
+#     if errors:
+#         raise RuntimeError(
+#             " | ".join(errors)
+#         )
 def main() -> None:
     """
-    Gera:
-    - o relatório normal do último dia útil;
-    - relatórios adicionais de sábados ou feriados
-      quando for detetada produção.
+    Executa diariamente e avalia apenas o dia anterior.
+
+    - sexta é enviada sábado após o fim do T3;
+    - sábado é enviado domingo se houve produção;
+    - domingo é enviado segunda se houve produção;
+    - HOLIDAYS só são enviados se houve produção.
     """
     now = datetime.now(TZ)
+    report_day = get_previous_calendar_day(now)
 
-    # O cron deve executar apenas em dias úteis.
-    if not is_operational_day(now):
-        print(
-            "Dia não operacional. "
-            "Report não enviado."
-        )
+    ready_at = get_report_ready_at(report_day)
+
+    if not is_report_ready(now, report_day):
+        print(f"[INFO] O relatório de "f"{report_day:%d/%m/%Y} ainda não está pronto. "
+            f"Executar depois de "f"{ready_at:%d/%m/%Y %H:%M}.",flush=True,)
         return
-
-    report_days = get_report_days_to_send(now)
 
     errors: list[str] = []
 
-    for report_day in report_days:
-        report_date = datetime.combine(
-            report_day,
-            dt_time(0, 0),
-            tzinfo=TZ,
-        )
+    with get_db_connection() as conn:
+        report_days = get_report_days_to_send(conn, now,)
 
-        pdf_path: Path | None = None
+        if not report_days:
+            print(f"[INFO] Sem relatório para enviar. "f"{report_day:%d/%m/%Y} foi "
+                "fim de semana/HOLIDAY sem atividade.",flush=True,)
+            return
 
-        try:
-            print(
-                "A gerar relatório de "
-                f"{report_day:%d/%m/%Y}..."
-            )
+        for report_day in report_days:
+            report_date = datetime.combine(report_day, dt_time(0, 0), tzinfo=TZ,)
 
-            sections = get_daily_sections(
-                report_date
-            )
+            pdf_path: Path | None = None
 
-            pdf_html = render_html(
-                report_date,
-                sections,
-            )
+            try:
+                print(f"[INFO] A gerar relatório de "f"{report_day:%d/%m/%Y}.",flush=True,)
 
-            email_html = build_email_html(
-                report_date
-            )
+                sections = get_daily_sections(conn,report_date,)
 
-            pdf_path = export_pdf(
-                pdf_html,
-                report_date,
-            )
+                pdf_html = render_html(report_date,sections,)
 
-            send_email_enabled = (
-                os.environ
-                .get("SEND_EMAIL", "true")
-                .lower()
-                == "true"
-            )
+                email_html = build_email_html(report_date,)
 
-            if send_email_enabled:
-                send_email(
-                    subject=(
-                        "Relatório Diário Granulados - "
-                        f"{report_date:%d/%m/%Y}"
-                    ),
-                    html_body=email_html,
-                    text_body=build_plain_text(
-                        report_date
-                    ),
-                    attachments=[pdf_path],
+                pdf_path = export_pdf(pdf_html,report_date,)
+
+                send_email_enabled = (
+                    os.environ
+                    .get("SEND_EMAIL", "true")
+                    .lower()
+                    == "true"
                 )
 
-                print(
-                    "E-mail de "
-                    f"{report_day:%d/%m/%Y} "
-                    "enviado com sucesso."
-                )
-            else:
-                print(
-                    "SEND_EMAIL=false, "
-                    "e-mail não enviado."
-                )
+                if send_email_enabled:
+                    send_email(
+                        subject=("Relatório Diário Granulados - "f"{report_date:%d/%m/%Y}"),
+                        html_body=email_html,
+                        text_body=build_plain_text(
+                            report_date
+                        ),
+                        attachments=[pdf_path],
+                    )
 
-            print(f"PDF criado: {pdf_path}")
+                    print(f"[OK] E-mail de " f"{report_day:%d/%m/%Y} ""enviado com sucesso.",
+                        flush=True,
+                    )
 
-        except Exception as exc:
-            error = (
-                "Falha no relatório de "
-                f"{report_day:%d/%m/%Y}: {exc}"
-            )
+                else:
+                    print("[INFO] SEND_EMAIL=false; ""e-mail não enviado.",flush=True,)
 
-            print(error)
-            errors.append(error)
+                print(f"[OK] PDF criado: {pdf_path}",flush=True,)
 
-        finally:
-            # Apaga o PDF mesmo que o envio de e-mail falhe.
-            if pdf_path and pdf_path.exists():
-                pdf_path.unlink()
-                print(f"PDF apagado: {pdf_path}")
+            except Exception as exc:
+                error = (f"Falha no relatório de " f"{report_day:%d/%m/%Y}: " f"{exc}")
+
+                print(f"[ERRO] {error}",flush=True,)
+
+                errors.append(error)
+
+            finally:
+                if pdf_path and pdf_path.exists():
+                    pdf_path.unlink()
+
+                    print(f"[INFO] PDF apagado: " f"{pdf_path}",flush=True,)
 
     if errors:
-        raise RuntimeError(
-            " | ".join(errors)
-        )
+        raise RuntimeError(" | ".join(errors))
+
 
 if __name__ == "__main__":
     main()

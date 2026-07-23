@@ -2,7 +2,157 @@
 # quarda queries SQL
 # cada query é uma string multi-linha, e deve ser escrita de forma a ser legível e fácil de manter
 ##################
+QUERY_HAS_REPORT_ACTIVITY = """
+WITH
+bounds AS (
+    SELECT
+        (
+            %(report_date)s::date
+            + interval '6 hours'
+        ) AT TIME ZONE 'Europe/Lisbon' AS start_06,
 
+        (
+            %(report_date)s::date
+            + interval '8 hours'
+        ) AT TIME ZONE 'Europe/Lisbon' AS start_08,
+
+        (
+            %(report_date)s::date
+            + interval '1 day'
+            + interval '6 hours'
+        ) AT TIME ZONE 'Europe/Lisbon' AS end_06,
+
+        (
+            %(report_date)s::date
+            + interval '1 day'
+            + interval '8 hours'
+        ) AT TIME ZONE 'Europe/Lisbon' AS end_08
+),
+
+calibracao_samples AS (
+    -- Último valor anterior ao início do relatório
+    SELECT
+        g.created_at,
+        g.total::numeric AS total
+    FROM calibracao.granulados g
+    CROSS JOIN bounds b
+    WHERE g.created_at < b.start_06
+      AND g.total IS NOT NULL
+    ORDER BY g.created_at DESC
+    LIMIT 1
+),
+
+calibracao_intervalo AS (
+    SELECT
+        g.created_at,
+        g.total::numeric AS total
+    FROM calibracao.granulados g
+    CROSS JOIN bounds b
+    WHERE g.created_at >= b.start_06
+      AND g.created_at <= b.end_06
+      AND g.total IS NOT NULL
+),
+
+calibracao_deltas AS (
+    SELECT
+        created_at,
+        total,
+        total - LAG(total) OVER (
+            ORDER BY created_at
+        ) AS delta_total
+    FROM (
+        SELECT * FROM calibracao_samples
+        UNION ALL
+        SELECT * FROM calibracao_intervalo
+    ) x
+),
+
+vapex_activity AS (
+    SELECT created_at, state
+    FROM desinfecao.machine_1
+
+    UNION ALL
+
+    SELECT created_at, state
+    FROM desinfecao.machine_2
+
+    UNION ALL
+
+    SELECT created_at, state
+    FROM desinfecao.machine_3
+
+    UNION ALL
+
+    SELECT created_at, state
+    FROM desinfecao.machine_4
+
+    UNION ALL
+
+    SELECT created_at, state
+    FROM desinfecao.machine_5
+
+    UNION ALL
+
+    SELECT created_at, state
+    FROM desinfecao.machine_6
+
+    UNION ALL
+
+    SELECT created_at, state
+    FROM desinfecao.machine_7
+
+    UNION ALL
+
+    SELECT created_at, state
+    FROM desinfecao.machine_8
+
+    UNION ALL
+
+    SELECT created_at, state
+    FROM desinfecao.machine_9
+)
+
+SELECT
+    (
+        -- Trituração
+        EXISTS (
+            SELECT 1
+            FROM trituracao.md m
+            CROSS JOIN bounds b
+            WHERE m.created_at >= b.start_08
+              AND m.created_at < b.end_08
+              AND (
+                  COALESCE(m.funcionamento, 0) = 1
+                  OR COALESCE(m.carga, 0) = 1
+              )
+        )
+
+        OR
+
+        -- Calibração
+        EXISTS (
+            SELECT 1
+            FROM calibracao_deltas
+            WHERE delta_total >= %(min_activity_kg)s
+        )
+
+        OR
+
+        -- VAPEX
+        EXISTS (
+            SELECT 1
+            FROM vapex_activity v
+            CROSS JOIN bounds b
+            WHERE v.created_at >= b.start_08
+              AND v.created_at < b.end_08
+              AND v.state IN (
+                  'Funcionamento',
+                  'Carga',
+                  'Descarga'
+              )
+        )
+    ) AS has_production;
+"""
 QUERY_TEMPO_PRODUCAO_MD = """
 WITH
 base AS (

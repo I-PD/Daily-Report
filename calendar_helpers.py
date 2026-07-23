@@ -4,7 +4,6 @@ from zoneinfo import ZoneInfo
 
 TZ = ZoneInfo("Europe/Lisbon")
 
-
 def parse_holidays():
     raw = os.getenv("HOLIDAYS", "")
     holidays = set()
@@ -16,17 +15,35 @@ def parse_holidays():
 
     return holidays
 
+def is_operational_date(day: date) -> bool:
+    """
+    Um dia operacional normal é:
+    - segunda a sexta;
+    - não incluído em HOLIDAYS.
 
-def is_operational_day(now):
-    # sábado = 5, domingo = 6
-    if now.weekday() >= 5:
+    Um sábado, domingo ou feriado ainda poderá originar
+    relatório se existir produção.
+    """
+    if day.weekday() >= 5:
         return False
 
-    if now.date() in parse_holidays():
+    if day in parse_holidays():
         return False
 
     return True
 
+# def is_operational_day(now):
+#     # sábado = 5, domingo = 6
+#     if now.weekday() >= 5:
+#         return False
+
+#     if now.date() in parse_holidays():
+#         return False
+
+#     return True
+
+def is_operational_day(now: datetime) -> bool:
+    return is_operational_date(now.date())
 
 def seconds_until_next_operational_day(now):
     next_day = now.date() + timedelta(days=1)
