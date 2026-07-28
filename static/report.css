@@ -41,6 +41,7 @@
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 2.5mm;
+      align-items: start;
   }
 
   .metric-card {
@@ -106,8 +107,13 @@
   }
   
   .metric-block {
+    min-width: 0;
+    height: auto;
+    align-self: start;
     border: 1px solid #2b3340;
-    background: #111827;
+    background: #ffffff;
+    align-self: start;
+    height: auto;
   }
   
   .block-title {
@@ -127,7 +133,8 @@
 
   .cards-grid {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    height: auto;
   }
   
   .metric-card {
