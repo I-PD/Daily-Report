@@ -10,6 +10,67 @@
   * {
     box-sizing: border-box;
   }
+
+  .sections-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 4mm 5mm;
+    align-items: start;
+  }
+
+  .report-section {
+      min-width: 0;
+      margin: 0;
+      padding: 0;
+      break-inside: avoid;
+      page-break-inside: avoid;
+  }
+
+  .report-section + .report-section {
+      margin: 0;
+      padding: 0;
+      border-top: 0;
+  }
+
+  .section-title {
+      margin: 0 0 2mm;
+      font-size: 14px;
+  }
+
+  .blocks-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 2.5mm;
+  }
+
+  .metric-card {
+      min-height: 16mm;
+      padding: 1.2mm 0.7mm;
+  }
+
+  .metric-label {
+      margin-bottom: 0.8mm;
+      font-size: 6.5px;
+  }
+
+  .metric-value {
+      font-size: 10px;
+  }
+
+  .report-table th {
+      padding: 1mm 0.5mm;
+      font-size: 6.8px;
+  }
+
+  .report-table td {
+      padding: 1.2mm 0.5mm;
+      font-size: 8.2px;
+  }
+
+  .table-block {
+      grid-column: 1 / -1;
+      margin: 0;
+  }
   
   body {
     font-family: Arial, sans-serif;
@@ -70,7 +131,7 @@
   }
   
   .metric-card {
-    min-height: 110px;
+    /* min-height: 110px; */
     border-right: 1px solid #2b3340;
     display: flex;
     flex-direction: column;
@@ -107,7 +168,7 @@
    ============================================================ */
 
   .report-section {
-    margin-top: 18px;
+    /* margin-top: 18px; */
     page-break-inside: avoid;
   }
 
@@ -118,8 +179,8 @@
   }
 
   .report-section + .report-section {
-    margin-top: 28px;
-    padding-top: 10px;
+    /* margin-top: 28px;
+    padding-top: 10px; */
     border-top: 2px solid #d0d0d0;
   }
 
@@ -153,10 +214,10 @@
   .report-table td {
     background: #d9d9e3;
     border: 1px solid #999999;
-    padding: 10px;
     text-align: center;
     font-weight: 700;
-    font-size: 16px;
+    /* font-size: 16px;
+    padding: 10px; */
   }
   
   .report-table td:first-child {

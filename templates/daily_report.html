@@ -69,81 +69,81 @@ Relatório Diário
 
 <body>
   <div class="page">
-
     <!-- Cabeçalho principal do relatório -->
     <div class="report-header">
       <h1>Relatório Diário</h1>
     </div>
 
-    <!-- Secções do relatório: Trituração, Desinfeção Trituração, etc. -->
-    {% for section in sections %}
-      <section class="report-section">
+    <div class="sections-grid">
+      <!-- Secções do relatório: Trituração, Desinfeção Trituração, etc. -->
+      {% for section in sections %}
+        <section class="report-section">
 
-        <!-- Título da secção -->
-        <h2 class="section-title">{{ section.title }}</h2>
+          <!-- Título da secção -->
+          <h2 class="section-title">{{ section.title }}</h2>
 
-        <!-- Blocos/cards da secção -->
-        <div class="blocks-grid">
-          {% for block in section.blocks %}
-        
-            {% if block.rows is defined %}
-        
-              <!-- Bloco do tipo tabela -->
-              <section class="table-block">
-                <div class="block-title">{{ block.title }}</div>
-        
-                <table class="report-table">
-                  <thead>
-                    <tr>
-                      {% for header in block.headers %}
-                        {% set header_style = block.rows[0]._header_styles[header] if block.rows and block.rows[0]._header_styles is defined and header in block.rows[0]._header_styles else "" %}
-                        <th class="{% if header_style == 'green' %}header-green{% elif header_style == 'blue' %}header-blue{% endif %}">
-                          {{ header }}
-                        </th>
-                      {% endfor %}
-                    </tr>
-                  </thead>
-        
-                  <tbody>
-                    {% for row in block.rows %}
-                      <tr class="{% if row['Produto'] == 'Total' %}total-row{% endif %}">
+          <!-- Blocos/cards da secção -->
+          <div class="blocks-grid">
+            {% for block in section.blocks %}
+          
+              {% if block.rows is defined %}
+          
+                <!-- Bloco do tipo tabela -->
+                <section class="table-block">
+                  <div class="block-title">{{ block.title }}</div>
+          
+                  <table class="report-table">
+                    <thead>
+                      <tr>
                         {% for header in block.headers %}
-                        <td class="{% if row['_styles'] is defined and header in row['_styles'] %}cell-{{ row['_styles'][header] }}{% endif %}">
-                          {{ row[header] }}
-                        </td>
+                          {% set header_style = block.rows[0]._header_styles[header] if block.rows and block.rows[0]._header_styles is defined and header in block.rows[0]._header_styles else "" %}
+                          <th class="{% if header_style == 'green' %}header-green{% elif header_style == 'blue' %}header-blue{% endif %}">
+                            {{ header }}
+                          </th>
                         {% endfor %}
                       </tr>
+                    </thead>
+          
+                    <tbody>
+                      {% for row in block.rows %}
+                        <tr class="{% if row['Produto'] == 'Total' %}total-row{% endif %}">
+                          {% for header in block.headers %}
+                          <td class="{% if row['_styles'] is defined and header in row['_styles'] %}cell-{{ row['_styles'][header] }}{% endif %}">
+                            {{ row[header] }}
+                          </td>
+                          {% endfor %}
+                        </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                </section>
+          
+              {% else %}
+          
+                <!-- Bloco do tipo cards 
+                <section class="metric-block">-->
+                  <section class="metric-block {% if block.cards|length == 1 %}full-width-block{% endif %}">
+                  <div class="block-title">{{ block.title }}</div>
+          
+                  <div class="cards-grid {% if block.cards|length == 1 %}single-card{% endif %}">
+                    {% for card in block.cards %}
+                      <div class="metric-card"
+                          style="background-color: {{ card.bg_color }}; color: {{ card.text_color }};">
+                        <div class="metric-label metric-label-subtitle">{{ card.label }}</div>
+                        <div class="metric-value">{{ card.value }}</div>
+                      </div>
                     {% endfor %}
-                  </tbody>
-                </table>
-              </section>
-        
-            {% else %}
-        
-              <!-- Bloco do tipo cards 
-              <section class="metric-block">-->
-                <section class="metric-block {% if block.cards|length == 1 %}full-width-block{% endif %}">
-                <div class="block-title">{{ block.title }}</div>
-        
-                <div class="cards-grid {% if block.cards|length == 1 %}single-card{% endif %}">
-                  {% for card in block.cards %}
-                    <div class="metric-card"
-                         style="background-color: {{ card.bg_color }}; color: {{ card.text_color }};">
-                      <div class="metric-label metric-label-subtitle">{{ card.label }}</div>
-                      <div class="metric-value">{{ card.value }}</div>
-                    </div>
-                  {% endfor %}
-                </div>
-              </section>
-        
-            {% endif %}
-        
-          {% endfor %}
-        </div>
+                  </div>
+                </section>
+          
+              {% endif %}
+          
+            {% endfor %}
+          </div>
 
-      </section>
-    {% endfor %}
-
+        </section>
+      {% endfor %}
+    </div>
   </div>
 </body>
 </html>
