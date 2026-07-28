@@ -51,6 +51,9 @@ BASE_DIR = Path(__file__).resolve().parent
 # Pasta onde vamos guardar os reports gerados
 REPORTS_DIR = BASE_DIR / "reports"
 REPORTS_DIR.mkdir(exist_ok=True)
+REPORT_KEEP_COUNT = int(
+    os.environ.get("REPORT_KEEP_COUNT", "10")
+)
 
 # Pasta dos templates HTML
 TEMPLATES_DIR = BASE_DIR / "templates"
@@ -64,7 +67,7 @@ class MetricCard:
     """
     Representa um cartão individual do dashboard/report.
     Exemplo:
-        label = "T1(08-16)"
+        label = "T1(00-08)"
         value = "05h33 (49%)"
     """
     label: str
@@ -190,7 +193,7 @@ def get_report_ready_at(report_day: date) -> datetime:
     """
     Hora a partir da qual o relatório pode ser gerado.
 
-    O turno mais tardio termina às 08:00 do dia seguinte.
+    O turno mais tardio termina às 23:59 do dia atual.
     Por defeito esperamos até às 08:15.
     """
     ready_hour = int(
@@ -343,13 +346,13 @@ def run_single_row_query(conn, query_name: str, query: str, params: dict | None 
     """
     Executa uma query que deve devolver apenas UMA linha,
     com colunas do tipo:
-        T1(08-16), T2(16-24), T3(00-08), TOTAL
+        T1(00-08), T2(08-16), T3(16-24), TOTAL
 
     Exemplo de saída:
         {
-            "T1(08-16)": "05h33 (49%)",
-            "T2(16-24)": "00h45 (36%)",
-            "T3(00-08)": "05h05 (28%)",
+            "T1(00-08)": "05h33 (49%)",
+            "T2(08-16)": "00h45 (36%)",
+            "T3(16-24)": "05h05 (28%)",
             "TOTAL": "11h24 (39%)",
         }
     """
@@ -367,7 +370,7 @@ def run_single_row_query(conn, query_name: str, query: str, params: dict | None 
         #raise RuntimeError("A query não devolveu resultados.")
         raise RuntimeError(f"A query {query_name!r} não devolveu resultados.")
 
-    ordered_labels = ["T1(08-16)", "T2(16-24)", "T3(00-08)", "TOTAL"]
+    ordered_labels = ["T1(00-08)", "T2(08-16)", "T3(16-24)", "TOTAL"]
     return {label: row.get(label) for label in ordered_labels}
 
 # Execução genérica de queries com várias linhas
@@ -404,7 +407,7 @@ def has_production_for_date(conn, report_day: date) -> bool:
     }
 
     min_kg = float(
-        os.environ.get("EXCEPTIONAL_DAY_MIN_KG", "1")
+        os.environ.get("EXCEPTIONAL_DAY_MIN_KG", "10")
     )
 
     row = run_single_vinc_row_query(
@@ -535,7 +538,7 @@ def build_standard_block(key: str, title: str, values: dict[str, object]) -> Met
     """
     cards: list[MetricCard] = []
 
-    for label in ["T1(08-16)", "T2(16-24)", "T3(00-08)", "TOTAL"]:
+    for label in ["T1(00-08)", "T2(08-16)", "T3(16-24)", "TOTAL"]:
         bg_color, text_color = default_card_style(label == "TOTAL")
 
         cards.append(
@@ -556,7 +559,7 @@ def build_standard_block(key: str, title: str, values: dict[str, object]) -> Met
 def build_kg_block(key: str, title: str, values: dict[str, object]) -> MetricBlock:
     cards: list[MetricCard] = []
 
-    for label in ["T1(08-16)", "T2(16-24)", "T3(00-08)", "TOTAL"]:
+    for label in ["T1(00-08)", "T2(08-16)", "T3(16-24)", "TOTAL"]:
         bg_color, text_color = default_card_style(label == "TOTAL")
 
         cards.append(
@@ -583,9 +586,9 @@ def build_calibracao_granulado_block(rows: list[dict[str, object]]) -> ReportTab
 
         formatted_rows.append({
             "Produto": produto,
-            "T1 (06-14)": format_kg(row.get("T1 (06-14)", 0)),
-            "T2 (14-22)": format_kg(row.get("T2 (14-22)", 0)),
-            "T3 (22-06)": format_kg(row.get("T3 (22-06)", 0)),
+            "T1(22-06)": format_kg(row.get("T1(22-06)", 0)),
+            "T2(06-14)": format_kg(row.get("T2(06-14)", 0)),
+            "T3(14-22)": format_kg(row.get("T3(14-22)", 0)),
             "Total (Kg)": format_kg(row.get("Total (Kg)", 0)),
             "%": "" if produto == "Total" else format_pct(row.get("Percentagem", 0)),
         })
@@ -595,9 +598,9 @@ def build_calibracao_granulado_block(rows: list[dict[str, object]]) -> ReportTab
         title="Total de Granulado Produzido - Dia Anterior",
         headers=[
             "Produto",
-            "T1 (06-14)",
-            "T2 (14-22)",
-            "T3 (22-06)",
+            "T1(22-06)",
+            "T2(06-14)",
+            "T3(14-22)",
             "Total (Kg)",
             "%",
         ],
@@ -615,9 +618,9 @@ def build_calibracao_oee_block(rows: list[dict[str, object]]) -> ReportTableBloc
     """
     headers = [
         "Indicador",
-        "T1 (06-14)",
-        "T2 (14-22)",
-        "T3 (22-06)",
+        "T1(22-06)",
+        "T2(06-14)",
+        "T3(14-22)",
         "Dia",
     ]
 
@@ -630,7 +633,7 @@ def build_calibracao_oee_block(rows: list[dict[str, object]]) -> ReportTableBloc
             "_styles": {},
         }
 
-        for col in ["T1 (06-14)", "T2 (14-22)", "T3 (22-06)", "Dia"]:
+        for col in ["T1(22-06)", "T2(06-14)", "T3(14-22)", "Dia"]:
             raw_value = float(row.get(col, 0) or 0)
 
             # if indicador == "Tempo Trabalho sem granulado":
@@ -660,23 +663,23 @@ def build_desinf_vinc_desinfecoes_block(rows: list[dict[str, object]]) -> Report
         vapex = str(row.get("VAPEX", ""))
         is_total_row = vapex == "TOTAL"
 
-        t1 = int(row.get("T1 (08-16)", 0) or 0)
-        t2 = int(row.get("T2 (16-24)", 0) or 0)
-        t3 = int(row.get("T3 (00-08)", 0) or 0)
+        t1 = int(row.get("T1(00-08)", 0) or 0)
+        t2 = int(row.get("T2(08-16)", 0) or 0)
+        t3 = int(row.get("T3(16-24)", 0) or 0)
         total = int(row.get("Total", 0) or 0)
 
         formatted_rows.append({
             "VAPEX": vapex,
-            "T1 (08-16)": t1,
-            "T2 (16-24)": t2,
-            "T3 (00-08)": t3,
+            "T1(00-08)": t1,
+            "T2(08-16)": t2,
+            "T3(16-24)": t3,
             "Total": total,
 
             # estilos por célula
             "_styles": {} if is_total_row else {
-                "T1 (08-16)": "ok" if t1 >= 4 else "bad",
-                "T2 (16-24)": "ok" if t2 >= 4 else "bad",
-                "T3 (00-08)": "ok" if t3 >= 4 else "bad",
+                "T1(00-08)": "ok" if t1 >= 4 else "bad",
+                "T2(08-16)": "ok" if t2 >= 4 else "bad",
+                "T3(16-24)": "ok" if t3 >= 4 else "bad",
             }
         })
 
@@ -685,9 +688,9 @@ def build_desinf_vinc_desinfecoes_block(rows: list[dict[str, object]]) -> Report
         title="Dia Anterior - Nº Desinfeções",
         headers=[
             "VAPEX",
-            "T1 (08-16)",
-            "T2 (16-24)",
-            "T3 (00-08)",
+            "T1(00-08)",
+            "T2(08-16)",
+            "T3(16-24)",
             "Total",
         ],
         rows=formatted_rows,
@@ -701,21 +704,21 @@ def build_desinf_trit_desinfecoes_block(rows: list[dict[str, object]]) -> Report
         vapex = str(row.get("VAPEX", ""))
         is_total_row = vapex == "TOTAL"
 
-        t1 = int(row.get("T1 (08-16)", 0) or 0)
-        t2 = int(row.get("T2 (16-24)", 0) or 0)
-        t3 = int(row.get("T3 (00-08)", 0) or 0)
+        t1 = int(row.get("T1(00-08)", 0) or 0)
+        t2 = int(row.get("T2(08-16)", 0) or 0)
+        t3 = int(row.get("T3(16-24)", 0) or 0)
         total = int(row.get("Total", 0) or 0)
 
         formatted_rows.append({
             "VAPEX": vapex,
-            "T1 (08-16)": t1,
-            "T2 (16-24)": t2,
-            "T3 (00-08)": t3,
+            "T1(00-08)": t1,
+            "T2(08-16)": t2,
+            "T3(16-24)": t3,
             "Total": total,
             "_styles": {} if is_total_row else {
-                "T1 (08-16)": "ok" if t1 >= 4 else "bad",
-                "T2 (16-24)": "ok" if t2 >= 4 else "bad",
-                "T3 (00-08)": "ok" if t3 >= 4 else "bad",
+                "T1(00-08)": "ok" if t1 >= 4 else "bad",
+                "T2(08-16)": "ok" if t2 >= 4 else "bad",
+                "T3(16-24)": "ok" if t3 >= 4 else "bad",
             }
         })
 
@@ -724,9 +727,9 @@ def build_desinf_trit_desinfecoes_block(rows: list[dict[str, object]]) -> Report
         title="Nº Desinfeções",
         headers=[
             "VAPEX",
-            "T1 (08-16)",
-            "T2 (16-24)",
-            "T3 (00-08)",
+            "T1(00-08)",
+            "T2(08-16)",
+            "T3(16-24)",
             "Total",
         ],
         rows=formatted_rows,
@@ -843,7 +846,7 @@ def build_oee_block(values: dict[str, object]) -> MetricBlock:
     """
     cards: list[MetricCard] = []
 
-    for label in ["T1(08-16)", "T2(16-24)", "T3(00-08)", "TOTAL"]:
+    for label in ["T1(00-08)", "T2(08-16)", "T3(16-24)", "TOTAL"]:
         numeric_value = float(values.get(label, 0) or 0)
         bg_color, text_color = get_oee_colors(numeric_value)
 
@@ -1096,7 +1099,8 @@ def export_pdf(html: str, report_date: datetime) -> Path:
         page.goto(html_path.resolve().as_uri(), wait_until="load")
         page.pdf(
             path=str(path),
-            format="A4",
+            format = "A3", # mudança para formato A3
+            # format="A4",
             landscape=True,
             print_background=True,
             margin={
@@ -1178,113 +1182,22 @@ def send_email(subject: str, html_body: str, text_body: str, attachments: list[P
         server.login(smtp_user, smtp_password)
         server.send_message(msg)
 
+def cleanup_old_reports() -> None:
+    """
+    Conserva apenas os REPORT_KEEP_COUNT PDFs mais recentes.
+    """
+    pdf_files = sorted(REPORTS_DIR.glob("*.pdf"),
+        key=lambda path: path.stat().st_mtime,reverse=True,)
+
+    for old_pdf in pdf_files[REPORT_KEEP_COUNT:]:
+        try:
+            old_pdf.unlink()
+
+            print(f"[INFO] PDF antigo apagado: {old_pdf}",flush=True,)
+        except OSError as exc:
+            print(f"[WARN] Não foi possível apagar "f"{old_pdf}: {exc}",flush=True,)
+
 # Função principal
-# def main() -> None:
-#     """
-#     Gera:
-#     - o relatório normal do último dia útil;
-#     - relatórios adicionais de sábados ou feriados
-#       quando for detetada produção.
-#     """
-#     now = datetime.now(TZ)
-
-#     # O cron deve executar apenas em dias úteis.
-#     if not is_operational_day(now):
-#         print(
-#             "Dia não operacional. "
-#             "Report não enviado."
-#         )
-#         return
-
-#     report_days = get_report_days_to_send(now)
-
-#     errors: list[str] = []
-
-#     for report_day in report_days:
-#         report_date = datetime.combine(
-#             report_day,
-#             dt_time(0, 0),
-#             tzinfo=TZ,
-#         )
-
-#         pdf_path: Path | None = None
-
-#         try:
-#             print(
-#                 "A gerar relatório de "
-#                 f"{report_day:%d/%m/%Y}..."
-#             )
-
-#             sections = get_daily_sections(
-#                 report_date
-#             )
-
-#             pdf_html = render_html(
-#                 report_date,
-#                 sections,
-#             )
-
-#             email_html = build_email_html(
-#                 report_date
-#             )
-
-#             pdf_path = export_pdf(
-#                 pdf_html,
-#                 report_date,
-#             )
-
-#             send_email_enabled = (
-#                 os.environ
-#                 .get("SEND_EMAIL", "true")
-#                 .lower()
-#                 == "true"
-#             )
-
-#             if send_email_enabled:
-#                 send_email(
-#                     subject=(
-#                         "Relatório Diário Granulados - "
-#                         f"{report_date:%d/%m/%Y}"
-#                     ),
-#                     html_body=email_html,
-#                     text_body=build_plain_text(
-#                         report_date
-#                     ),
-#                     attachments=[pdf_path],
-#                 )
-
-#                 print(
-#                     "E-mail de "
-#                     f"{report_day:%d/%m/%Y} "
-#                     "enviado com sucesso."
-#                 )
-#             else:
-#                 print(
-#                     "SEND_EMAIL=false, "
-#                     "e-mail não enviado."
-#                 )
-
-#             print(f"PDF criado: {pdf_path}")
-
-#         except Exception as exc:
-#             error = (
-#                 "Falha no relatório de "
-#                 f"{report_day:%d/%m/%Y}: {exc}"
-#             )
-
-#             print(error)
-#             errors.append(error)
-
-#         finally:
-#             # Apaga o PDF mesmo que o envio de e-mail falhe.
-#             if pdf_path and pdf_path.exists():
-#                 pdf_path.unlink()
-#                 print(f"PDF apagado: {pdf_path}")
-
-#     if errors:
-#         raise RuntimeError(
-#             " | ".join(errors)
-#         )
 def main() -> None:
     """
     Executa diariamente e avalia apenas o dia anterior.
@@ -1341,20 +1254,16 @@ def main() -> None:
                     send_email(
                         subject=("Relatório Diário Granulados - "f"{report_date:%d/%m/%Y}"),
                         html_body=email_html,
-                        text_body=build_plain_text(
-                            report_date
-                        ),
+                        text_body=build_plain_text(report_date),
                         attachments=[pdf_path],
                     )
 
-                    print(f"[OK] E-mail de " f"{report_day:%d/%m/%Y} ""enviado com sucesso.",
-                        flush=True,
-                    )
-
+                    print(f"[OK] E-mail de " f"{report_day:%d/%m/%Y} ""enviado com sucesso.",flush=True,)
                 else:
                     print("[INFO] SEND_EMAIL=false; ""e-mail não enviado.",flush=True,)
 
                 print(f"[OK] PDF criado: {pdf_path}",flush=True,)
+                cleanup_old_reports()
 
             except Exception as exc:
                 error = (f"Falha no relatório de " f"{report_day:%d/%m/%Y}: " f"{exc}")
@@ -1363,11 +1272,11 @@ def main() -> None:
 
                 errors.append(error)
 
-            finally:
-                if pdf_path and pdf_path.exists():
-                    pdf_path.unlink()
+            # finally:
+            #     if pdf_path and pdf_path.exists():
+            #         pdf_path.unlink()
 
-                    print(f"[INFO] PDF apagado: " f"{pdf_path}",flush=True,)
+            #         print(f"[INFO] PDF apagado: " f"{pdf_path}",flush=True,)
 
     if errors:
         raise RuntimeError(" | ".join(errors))

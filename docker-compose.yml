@@ -2,6 +2,8 @@ services:
   daily-report:
     build: .
     container_name: daily-report
+    volumes:
+      - ./report:/app/reports
     env_file:
       - .env
     restart: "no"

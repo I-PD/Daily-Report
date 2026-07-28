@@ -162,9 +162,9 @@ base AS (
 ),
 shift_def AS (
   SELECT * FROM (VALUES
-    (1, '08-16', interval '8 hours',  interval '16 hours'),
-    (2, '16-24', interval '16 hours', interval '24 hours'),
-    (3, '00-08', interval '24 hours', interval '32 hours')
+    (1, '00-08', interval '0 hours',  interval '8 hours'),
+    (2, '08-16', interval '8 hours',  interval '16 hours'),
+    (3, '16-24', interval '16 hours', interval '24 hours')
   ) v(turno_id, turno, start_off, end_off)
 ),
 shifts AS (
@@ -262,13 +262,13 @@ pivot AS (
 SELECT
   to_char(make_interval(mins => t1_func::int), 'HH24"h"MI')
     || ' (' || (CASE WHEN t1_func > 0 THEN round(100.0 * t1_carga / t1_func)::int ELSE 0 END) || '%%)'
-    AS "T1(08-16)",
+    AS "T1(00-08)",
   to_char(make_interval(mins => t2_func::int), 'HH24"h"MI')
     || ' (' || (CASE WHEN t2_func > 0 THEN round(100.0 * t2_carga / t2_func)::int ELSE 0 END) || '%%)'
-    AS "T2(16-24)",
+    AS "T2(08-16)",
   to_char(make_interval(mins => t3_func::int), 'HH24"h"MI')
     || ' (' || (CASE WHEN t3_func > 0 THEN round(100.0 * t3_carga / t3_func)::int ELSE 0 END) || '%%)'
-    AS "T3(00-08)",
+    AS "T3(16-24)",
   to_char(make_interval(mins => (t1_func + t2_func + t3_func)::int), 'HH24"h"MI')
     || ' (' || (
         CASE
@@ -288,10 +288,9 @@ base AS (
 ),
 shift_def AS (
   SELECT * FROM (VALUES
-    (1, '08-16', interval '8 hours', interval '16 hours'),
-    (2, '16-24', interval '16 hours', interval '24 hours'),
-    (3, '00-08', interval '24 hours', interval '32 hours')
-    --(3, '00-08', interval '0 hour',  interval '8 hours')
+    (1, '00-08', interval '0 hours',  interval '8 hours'),
+    (2, '08-16', interval '8 hours',  interval '16 hours'),
+    (3, '16-24', interval '16 hours', interval '24 hours')
   ) v(turno_id, turno, start_off, end_off)
 ),
 days AS (
@@ -395,9 +394,9 @@ pivot AS (
   FROM work_by_shift
 )
 SELECT
-  to_char(make_interval(secs => t1_sec::int), 'HH24hMI') AS "T1(08-16)",
-  to_char(make_interval(secs => t2_sec::int), 'HH24hMI') AS "T2(16-24)",
-  to_char(make_interval(secs => t3_sec::int), 'HH24hMI') AS "T3(00-08)",
+  to_char(make_interval(secs => t1_sec::int), 'HH24hMI') AS "T1(00-08)",
+  to_char(make_interval(secs => t2_sec::int), 'HH24hMI') AS "T2(08-16)",
+  to_char(make_interval(secs => t3_sec::int), 'HH24hMI') AS "T3(16-24)",
   to_char(make_interval(secs => (t1_sec + t2_sec + t3_sec)::int), 'HH24hMI') AS "TOTAL"
 FROM pivot;
 """
@@ -411,10 +410,9 @@ WITH prod AS (
   ),
   shift_def AS (
     SELECT * FROM (VALUES
-      (1, '08-16', interval '8 hours', interval '16 hours'),
-      (2, '16-24', interval '16 hours', interval '24 hours'),
-      (3, '00-08', interval '24 hours', interval '32 hours')
-      --(3, '00-08', interval '0 hour',  interval '8 hours')
+      (1, '00-08', interval '0 hours',  interval '8 hours'),
+      (2, '08-16', interval '8 hours',  interval '16 hours'),
+      (3, '16-24', interval '16 hours', interval '24 hours')
     ) v(turno_id, turno, start_off, end_off)
   ),
   days AS (
@@ -484,16 +482,16 @@ WITH prod AS (
 ),
 pivot AS (
   SELECT
-    coalesce(max(kg_produzidos) FILTER (WHERE turno_id=1 AND dia_ref='Dia-1'), 0) AS "T1(08-16)",
-    coalesce(max(kg_produzidos) FILTER (WHERE turno_id=2 AND dia_ref='Dia-1'), 0) AS "T2(16-24)",
-    coalesce(max(kg_produzidos) FILTER (WHERE turno_id=3 AND dia_ref='Dia-1'), 0) AS "T3(00-08)"
+    coalesce(max(kg_produzidos) FILTER (WHERE turno_id=1 AND dia_ref='Dia-1'), 0) AS "T1(00-08)",
+    coalesce(max(kg_produzidos) FILTER (WHERE turno_id=2 AND dia_ref='Dia-1'), 0) AS "T2(08-16)",
+    coalesce(max(kg_produzidos) FILTER (WHERE turno_id=3 AND dia_ref='Dia-1'), 0) AS "T3(16-24)"
   FROM prod
 )
 SELECT
-  "T1(08-16)",
-  "T2(16-24)",
-  "T3(00-08)",
-  ("T1(08-16)" + "T2(16-24)" + "T3(00-08)") AS "TOTAL"
+  "T1(00-08)",
+  "T2(08-16)",
+  "T3(16-24)",
+  ("T1(00-08)" + "T2(08-16)" + "T3(16-24)") AS "TOTAL"
 FROM pivot;
 """
 QUERY_OEE = """ 
@@ -508,9 +506,9 @@ base AS (
 ),
 shift_def AS (
   SELECT * FROM (VALUES
-    (1, '08-16', interval '8 hours',  interval '16 hours'),
-    (2, '16-24', interval '16 hours', interval '24 hours'),
-    (3, '00-08', interval '24 hours', interval '32 hours')
+    (1, '00-08', interval '0 hours',  interval '8 hours'),
+    (2, '08-16', interval '8 hours',  interval '16 hours'),
+    (3, '16-24', interval '16 hours', interval '24 hours')
   ) v(turno_id, turno, start_off, end_off)
 ),
 shifts AS (
@@ -699,9 +697,9 @@ pivot AS (
   FROM oee_by_shift
 )
 SELECT
-  round(t1_oee, 1) AS "T1(08-16)",
-  round(t2_oee, 1) AS "T2(16-24)",
-  round(t3_oee, 1) AS "T3(00-08)",
+  round(t1_oee, 1) AS "T1(00-08)",
+  round(t2_oee, 1) AS "T2(08-16)",
+  round(t3_oee, 1) AS "T3(16-24)",
   round(total_oee, 1) AS "TOTAL"
 FROM pivot;
 """
@@ -734,9 +732,9 @@ WITH prod AS (
   ),
   shift_def AS (
     SELECT * FROM (VALUES
-      (1, '08-16', interval '8 hours', interval '16 hours'),
-      (2, '16-24', interval '16 hours', interval '24 hours'),
-      (3, '00-08', interval '24 hours',  interval '32 hours')
+      (1, '00-08', interval '0 hours',  interval '8 hours'),
+      (2, '08-16', interval '8 hours',  interval '16 hours'),
+      (3, '16-24', interval '16 hours', interval '24 hours')
     ) v(turno_id, turno, start_off, end_off)
   ),
   days AS (
@@ -804,16 +802,16 @@ WITH prod AS (
 ),
 pivot AS (
   SELECT
-    coalesce(max(kg_produzidos) FILTER (WHERE turno_id=1 AND dia_ref='Dia-1'), 0) AS "T1(08-16)",
-    coalesce(max(kg_produzidos) FILTER (WHERE turno_id=2 AND dia_ref='Dia-1'), 0) AS "T2(16-24)",
-    coalesce(max(kg_produzidos) FILTER (WHERE turno_id=3 AND dia_ref='Dia-1'), 0) AS "T3(00-08)"
+    coalesce(max(kg_produzidos) FILTER (WHERE turno_id=1 AND dia_ref='Dia-1'), 0) AS "T1(00-08)",
+    coalesce(max(kg_produzidos) FILTER (WHERE turno_id=2 AND dia_ref='Dia-1'), 0) AS "T2(08-16)",
+    coalesce(max(kg_produzidos) FILTER (WHERE turno_id=3 AND dia_ref='Dia-1'), 0) AS "T3(16-24)"
   FROM prod
 )
 SELECT
-  "T1(08-16)",
-  "T2(16-24)",
-  "T3(00-08)",
-  ("T1(08-16)" + "T2(16-24)" + "T3(00-08)") AS "TOTAL"
+  "T1(00-08)",
+  "T2(08-16)",
+  "T3(16-24)",
+  ("T1(00-08)" + "T2(08-16)" + "T3(16-24)") AS "TOTAL"
 FROM pivot;
 """
 QUERY_DESINF_TRIT_TOTAL_SILOS_8H = """
@@ -844,9 +842,9 @@ base AS (
 ),
 shift_def AS (
   SELECT * FROM (VALUES
-    (1, 'T1 (06-14)', interval '6 hours',  interval '14 hours'),
-    (2, 'T2 (14-22)', interval '14 hours', interval '22 hours'),
-    (3, 'T3 (22-06)', interval '22 hours', interval '30 hours')
+    (1, 'T1(22-06)', interval '-2 hours', interval '6 hours'),
+    (2, 'T2(06-14)', interval '6 hours',  interval '14 hours'),
+    (3, 'T3(14-22)', interval '14 hours', interval '22 hours')
   ) v(turno_id, turno, start_off, end_off)
 ),
 shifts AS (
@@ -943,9 +941,9 @@ grand_total AS (
 )
 SELECT
   produto,
-  ROUND(t1, 0) AS "T1 (06-14)",
-  ROUND(t2, 0) AS "T2 (14-22)",
-  ROUND(t3, 0) AS "T3 (22-06)",
+  ROUND(t1, 0) AS "T1(22-06)",
+  ROUND(t2, 0) AS "T2(06-06)",
+  ROUND(t3, 0) AS "T3(14-22)",
   ROUND(total_kg, 0) AS "Total (Kg)",
   CASE
     WHEN produto = 'Total' THEN NULL
@@ -973,9 +971,9 @@ base AS (
 ),
 shift_def AS (
   SELECT * FROM (VALUES
-    (1, 'T1 (08-16)', interval '8 hours',  interval '16 hours'),
-    (2, 'T2 (16-24)', interval '16 hours', interval '24 hours'),
-    (3, 'T3 (00-08)', interval '24 hours', interval '32 hours')
+    (1, '00-08', interval '0 hours',  interval '8 hours'),
+    (2, '08-16', interval '8 hours',  interval '16 hours'),
+    (3, '16-24', interval '16 hours', interval '24 hours')
   ) v(turno_id, turno, start_off, end_off)
 ),
 shifts AS (
@@ -1154,9 +1152,9 @@ base AS (
 ),
 shift_def AS (
   SELECT * FROM (VALUES
-    (1, 'T1 (06-14)', interval '6 hours',  interval '14 hours'),
-    (2, 'T2 (14-22)', interval '14 hours', interval '22 hours'),
-    (3, 'T3 (22-06)', interval '22 hours', interval '30 hours')
+    (1, 'T1(22-06)', interval '-2 hours', interval '6 hours'),
+    (2, 'T2(06-14)', interval '6 hours',  interval '14 hours'),
+    (3, 'T3(14-22)', interval '14 hours', interval '22 hours')
   ) v(turno_id, turno, start_off, end_off)
 ),
 shifts AS (
@@ -1392,9 +1390,9 @@ pivot AS (
 )
 SELECT
   'Performance' AS "Indicador",
-  ROUND(LEAST(100.0, perf_t1), 1) AS "T1 (06-14)",
-  ROUND(LEAST(100.0, perf_t2), 1) AS "T2 (14-22)",
-  ROUND(LEAST(100.0, perf_t3), 1) AS "T3 (22-06)",
+  ROUND(LEAST(100.0, perf_t1), 1) AS "T1(22-06)",
+  ROUND(LEAST(100.0, perf_t2), 1) AS "T2(06-14)",
+  ROUND(LEAST(100.0, perf_t3), 1) AS "T3(14-22)",
   ROUND(LEAST(100.0, (SELECT performance_dia FROM kpis_day)), 1) AS "Dia"
 FROM pivot
 
@@ -1402,9 +1400,9 @@ UNION ALL
 
 SELECT
   'Disponibilidade' AS "Indicador",
-  ROUND(LEAST(100.0, disp_t1), 1) AS "T1 (06-14)",
-  ROUND(LEAST(100.0, disp_t2), 1) AS "T2 (14-22)",
-  ROUND(LEAST(100.0, disp_t3), 1) AS "T3 (22-06)",
+  ROUND(LEAST(100.0, disp_t1), 1) AS "T1(22-06)",
+  ROUND(LEAST(100.0, disp_t2), 1) AS "T2(06-14)",
+  ROUND(LEAST(100.0, disp_t3), 1) AS "T3(14-22)",
   ROUND(LEAST(100.0, (SELECT disponibilidade_dia FROM kpis_day)), 1) AS "Dia"
 FROM pivot
 
@@ -1412,9 +1410,9 @@ UNION ALL
 
 SELECT
   'OEE' AS "Indicador",
-  ROUND(LEAST(100.0, oee_t1), 1) AS "T1 (06-14)",
-  ROUND(LEAST(100.0, oee_t2), 1) AS "T2 (14-22)",
-  ROUND(LEAST(100.0, oee_t3), 1) AS "T3 (22-06)",
+  ROUND(LEAST(100.0, oee_t1), 1) AS "T1(22-06)",
+  ROUND(LEAST(100.0, oee_t2), 1) AS "T2(06-14)",
+  ROUND(LEAST(100.0, oee_t3), 1) AS "T3(14-22)",
   ROUND(
     LEAST(
       100.0,
@@ -1428,9 +1426,9 @@ UNION ALL
 
 SELECT
   'Tempo Trabalho sem granulado' AS "Indicador",
-  ROUND(tempo_t1, 0) AS "T1 (06-14)",
-  ROUND(tempo_t2, 0) AS "T2 (14-22)",
-  ROUND(tempo_t3, 0) AS "T3 (22-06)",
+  ROUND(tempo_t1, 0) AS "T1(22-06)",
+  ROUND(tempo_t2, 0) AS "T2(06-14)",
+  ROUND(tempo_t3, 0) AS "T3(14-22)",
   ROUND((SELECT tempo_sem_granulado_dia FROM kpis_day), 0) AS "Dia"
 FROM pivot
 
@@ -1438,9 +1436,9 @@ UNION ALL
 
 SELECT
   'Tempo Secção Desligada' AS "Indicador",
-  ROUND(desligada_t1, 0) AS "T1 (06-14)",
-  ROUND(desligada_t2, 0) AS "T2 (14-22)",
-  ROUND(desligada_t3, 0) AS "T3 (22-06)",
+  ROUND(desligada_t1, 0) AS "T1(22-06)",
+  ROUND(desligada_t2, 0) AS "T2(06-14)",
+  ROUND(desligada_t3, 0) AS "T3(14-22)",
   ROUND((SELECT tempo_seccao_desligada_dia FROM kpis_day), 0) AS "Dia"
 FROM pivot;
 """
@@ -1452,9 +1450,9 @@ base AS (
 ),
 shift_def AS (
   SELECT * FROM (VALUES
-    (1, 'T1 (08-16)', interval '8 hours',  interval '16 hours'),
-    (2, 'T2 (16-24)', interval '16 hours', interval '24 hours'),
-    (3, 'T3 (00-08)', interval '24 hours', interval '32 hours')
+    (1, '00-08', interval '0 hours',  interval '8 hours'),
+    (2, '08-16', interval '8 hours',  interval '16 hours'),
+    (3, '16-24', interval '16 hours', interval '24 hours')
   ) v(turno_id, turno, start_off, end_off)
 ),
 shifts AS (
