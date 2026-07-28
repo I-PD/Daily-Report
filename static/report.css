@@ -1,6 +1,14 @@
-@page {
+/* @page {
     size: A4 landscape;
     margin: 12mm;
+  } */
+  @page {
+    size: A3 landscape;
+    margin: 7mm;
+  }
+  /* Evita que padding e border aumentem a largura dos elementos */
+  * {
+    box-sizing: border-box;
   }
   
   body {

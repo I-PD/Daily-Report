@@ -120,8 +120,9 @@ Relatório Diário
         
             {% else %}
         
-              <!-- Bloco do tipo cards -->
-              <section class="metric-block">
+              <!-- Bloco do tipo cards 
+              <section class="metric-block">-->
+                <section class="metric-block {% if block.cards|length == 1 %}full-width-block{% endif %}">
                 <div class="block-title">{{ block.title }}</div>
         
                 <div class="cards-grid {% if block.cards|length == 1 %}single-card{% endif %}">
