@@ -389,50 +389,6 @@ def has_production_for_date(conn, report_day: date) -> bool:
 
     return has_production
 
-    # # Produção da Trituração
-    # trituracao = run_single_row_query(
-    #     QUERY_KGS_SILOS,
-    #     params,
-    # )
-
-    # # Produção da Desinfeção Trituração
-    # desinfecao = run_single_row_query(
-    #     QUERY_DESINF_TRIT_KGS_SILOS_DIA_ANTERIOR,
-    #     params,
-    # )
-
-    # # Produção da Calibração
-    # try:
-    #     calibracao_rows = run_multi_row_query(
-    #         QUERY_CALIB_GRANULADO_DIA_ANTERIOR,
-    #         params,
-    #     )
-    # except RuntimeError:
-    #     calibracao_rows = []
-
-    # calibracao_total = next(
-    #     (
-    #         float(row.get("Total (Kg)", 0) or 0)
-    #         for row in calibracao_rows
-    #         if str(row.get("produto", "")).strip().lower()
-    #         == "total"
-    #     ),
-    #     0.0,
-    # )
-
-    # total_kg = (
-    #     float(trituracao.get("TOTAL", 0) or 0)
-    #     + float(desinfecao.get("TOTAL", 0) or 0)
-    #     + calibracao_total
-    # )
-
-    # print(
-    #     f"Produção detetada em {report_day:%d/%m/%Y}: "
-    #     f"{total_kg:.0f} kg "
-    #     f"(limiar {min_kg:.0f} kg)."
-    # )
-
-    # return total_kg >= min_kg
 
 def get_report_days_to_send(conn, now: datetime) -> list[date]:
     """
@@ -459,35 +415,6 @@ def get_report_days_to_send(conn, now: datetime) -> list[date]:
         return [report_day]
 
     return []
-
-    # # Começa no dia seguinte ao último dia útil normal.
-    # candidate = standard_day + timedelta(days=1)
-
-    # # Percorre os dias até ao dia atual, sem incluir hoje.
-    # while candidate < now.date():
-    #     candidate_dt = datetime.combine(
-    #         candidate,
-    #         dt_time(0, 0),
-    #         tzinfo=TZ,
-    #     )
-
-    #     # Ignora domingo.
-    #     # Verifica sábado, feriados ou dias de férias.
-    #     is_exceptional_candidate = (
-    #         candidate.weekday() != 6
-    #         and not is_operational_day(candidate_dt)
-    #     )
-
-    #     if (
-    #         is_exceptional_candidate
-    #         and has_production_for_date(candidate)
-    #     ):
-    #         report_days.append(candidate)
-
-    #     candidate += timedelta(days=1)
-
-    # # Remove possíveis duplicados e ordena cronologicamente.
-    # return sorted(set(report_days))
 
 # Construção dos blocos do relatório
 def build_standard_block(key: str, title: str, values: dict[str, object]) -> MetricBlock:
@@ -626,9 +553,12 @@ def build_desinf_vinc_desinfecoes_block(rows: list[dict[str, object]]) -> Report
         vapex = str(row.get("VAPEX", ""))
         is_total_row = vapex == "TOTAL"
 
-        t1 = int(row.get("T1(00-08)", 0) or 0)
-        t2 = int(row.get("T2(08-16)", 0) or 0)
-        t3 = int(row.get("T3(16-24)", 0) or 0)
+        # t1 = int(row.get("T1(00-08)", 0) or 0)
+        # t2 = int(row.get("T2(08-16)", 0) or 0)
+        # t3 = int(row.get("T3(16-24)", 0) or 0)
+        t1 = int(row["t1"] or 0)
+        t2 = int(row["t2"] or 0)
+        t3 = int(row["t3"] or 0)
         total = int(row.get("Total", 0) or 0)
 
         formatted_rows.append({
@@ -637,7 +567,6 @@ def build_desinf_vinc_desinfecoes_block(rows: list[dict[str, object]]) -> Report
             "T2(08-16)": t2,
             "T3(16-24)": t3,
             "Total": total,
-
             # estilos por célula
             "_styles": {} if is_total_row else {
                 "T1(00-08)": "ok" if t1 >= 4 else "bad",
