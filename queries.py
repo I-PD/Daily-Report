@@ -942,7 +942,7 @@ grand_total AS (
 SELECT
   produto,
   ROUND(t1, 0) AS "T1(22-06)",
-  ROUND(t2, 0) AS "T2(06-06)",
+  ROUND(t2, 0) AS "T2(06-14)",
   ROUND(t3, 0) AS "T3(14-22)",
   ROUND(total_kg, 0) AS "Total (Kg)",
   CASE
