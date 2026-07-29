@@ -171,24 +171,6 @@ def get_previous_calendar_day(now: datetime) -> date:
     """
     return now.date() - timedelta(days=1)
 
-# def get_report_date() -> datetime:
-#     """
-#     Define a data de referência do relatório.
-
-#     Em vez de assumir:
-#     - segunda -> sexta
-#     - outros dias -> ontem
-
-#     passa a procurar o último dia operacional anterior,
-#     ignorando:
-#     - domingos
-#     - feriados/férias definidos no .env
-#     """
-#     now = datetime.now(TZ)
-#     report_day = previous_operational_day(now)
-
-#     return datetime.combine(report_day, dt_time(0, 0), tzinfo=TZ)
-
 def get_report_ready_at(report_day: date) -> datetime:
     """
     Hora a partir da qual o relatório pode ser gerado.
@@ -212,12 +194,6 @@ def get_report_ready_at(report_day: date) -> datetime:
 
 def is_report_ready(now: datetime, report_day: date,) -> bool:
     return now >= get_report_ready_at(report_day)
-
-# def get_today_local_date() -> str:
-#     """
-#     Devolve a data local de hoje em formato dd/mm/YYYY.
-#     """
-#     return datetime.now(TZ).strftime("%d/%m/%Y")
 
 # Ligação à base de dados
 def get_db_connection():
@@ -249,19 +225,6 @@ def get_db_connection():
     conn.autocommit = True
 
     return conn
-# def get_db_connection():
-#     """
-#     Abre ligação à base de dados PostgreSQL usando as
-#     variáveis definidas no .env.
-#     """
-#     return psycopg2.connect(
-#         host=os.environ["DB_HOST"],
-#         port=int(os.environ.get("DB_PORT", "5432")),
-#         dbname=os.environ["DB_NAME"],
-#         user=os.environ["DB_USER"],
-#         password=os.environ["DB_PASSWORD"],
-#         cursor_factory=RealDictCursor,
-#     )
 
 #  Formatação de valores dentro das células
 # Passar de segundos para formato horas:minutos

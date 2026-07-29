@@ -1122,9 +1122,9 @@ total_row AS (
 )
 SELECT
   vapex AS "VAPEX",
-  t1 AS "T1 (08-16)",
-  t2 AS "T2 (16-24)",
-  t3 AS "T3 (00-08)",
+  t1 ,
+  t2 ,
+  t3 ,
   (t1 + t2 + t3) AS "Total"
 FROM (
   SELECT * FROM rows_vapex
@@ -1613,9 +1613,9 @@ total_row AS (
 )
 SELECT
   vapex AS "VAPEX",
-  t1 AS "T1 (08-16)",
-  t2 AS "T2 (16-24)",
-  t3 AS "T3 (00-08)",
+  t1 ,
+  t2 ,
+  t3 ,
   (t1 + t2 + t3) AS "Total"
 FROM (
   SELECT * FROM rows_vapex
