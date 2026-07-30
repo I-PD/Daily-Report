@@ -596,9 +596,12 @@ def build_desinf_trit_desinfecoes_block(rows: list[dict[str, object]]) -> Report
         vapex = str(row.get("VAPEX", ""))
         is_total_row = vapex == "TOTAL"
 
-        t1 = int(row.get("T1(00-08)", 0) or 0)
-        t2 = int(row.get("T2(08-16)", 0) or 0)
-        t3 = int(row.get("T3(16-24)", 0) or 0)
+        # t1 = int(row.get("T1(00-08)", 0) or 0)
+        # t2 = int(row.get("T2(08-16)", 0) or 0)
+        # t3 = int(row.get("T3(16-24)", 0) or 0)
+        t1 = int(row["t1"] or 0)
+        t2 = int(row["t2"] or 0)
+        t3 = int(row["t3"] or 0)
         total = int(row.get("Total", 0) or 0)
 
         formatted_rows.append({
