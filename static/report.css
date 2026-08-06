@@ -11,6 +11,29 @@
     box-sizing: border-box;
   }
 
+  body {
+    font-family: Arial, sans-serif;
+    background: #ffffff;
+    color: #111111;
+    margin: 0;
+    padding: 0;
+  }
+
+  .page {
+    width: 100%;
+  }
+  
+  .report-header {
+    /* margin-bottom: 18px; */
+    margin-bottom: 4mm;
+  }
+  
+  .report-header h1 {
+    font-size: 20px;
+    margin: 0 0 6px 0;
+    color: #111111;
+  }
+
   .sections-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -25,13 +48,6 @@
       break-inside: avoid;
       page-break-inside: avoid;
   }
-
-  .report-section + .report-section {
-      margin: 0;
-      padding: 0;
-      border-top: 0;
-  }
-
   .section-title {
       margin: 0 0 2mm;
       font-size: 14px;
@@ -44,11 +60,159 @@
       align-items: start;
   }
 
+  .metric-block, 
+  .table-block {
+    min-width: 0;
+    /* height: auto; 
+    align-self: start;*/
+    border: 1px solid #2b3340;
+    background: #ffffff;
+    align-self: start;
+    height: auto;
+  }
+  
+  .block-title {
+    text-align: center;
+    text-transform: uppercase;
+    color: #1f1f1f;
+    padding: 1.6mm 1mm;
+    font-size: 12px;
+    font-weight: 700;
+    /* font-weight: bold;
+    font-size: 14px;
+    padding: 8px; */
+    border-bottom: 1px solid #d0d0d0;
+    background: #f3f4f6;
+    
+  }
+  
+  .cards-grid {
+    display: grid;
+    /* grid-template-columns: repeat(4, minmax(0, 1fr)); */
+    height: auto;
+  }
+
+  .cards-grid.cards-1 {
+    grid-template-columns: 1fr;
+  }
+  
+  .cards-grid.cards-4 {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  
+  .cards-grid.cards-5 {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+  
+  /* .cards-grid.single-card {
+    grid-template-columns: 1fr;
+  } */
+   
   .metric-card {
+    /* min-height: 110px; 
+    padding: 10px;
+    box-sizing: border-box; */
+    min-height: 16mm;
+    padding: 1.2mm 0.7mm;
+    border-right: 1px solid #2b3340;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+  }
+  
+  .metric-card:last-child {
+    border-right: none;
+  }
+  
+  .metric-label {
+    margin-bottom: 0.8mm;
+    text-align: center;
+    font-size: 8px;
+    line-height: 1.15;
+  }
+
+  .metric-label-subtitle {
+    /* font-size: 11px;
+    margin-bottom: 12px; */
+    font-weight: 500;
+    opacity: 0.9;
+  }
+  
+  .metric-value {
+    text-align: center;
+    font-size: 9.2px;
+    line-height: 1.15;
+    font-weight: 700;
+  }
+
+  /* Os blocos de snapshot às 08h ficam centrados e não ocupam toda a largura. */
+  .full-width-block {
+    grid-column: 1 / -1;
+    width: 62%;
+    justify-self: center;
+  }
+
+  .table-block {
+    grid-column: 1 / -1;
+    margin: 0;
+  }
+
+  .report-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+  }
+
+  .report-table th {
+    padding: 0.9mm 0.45mm;
+    border: 1px solid #999999;
+    background: #eeeeee;
+    text-align: center;
+    font-size: 6.5px;
+    line-height: 1.15;
+    font-weight: 700;
+  }
+
+  .report-table td {
+    padding: 0.95mm 0.45mm;
+    border: 1px solid #999999;
+    background: #d9d9e3;
+    text-align: center;
+    font-size: 7.3px;
+    line-height: 1.15;
+    font-weight: 700;
+  }
+
+  .report-table .total-row td {
+    background: #6b6b6b;
+    color: #ffffff;
+    font-weight: 800;
+  }
+
+  /* Tabelas que beneficiam de menos largura, centradas dentro da secção. */
+  .table-calibracao_granulado,
+  .table-calibracao_oee {
+    width: 90%;
+    justify-self: center;
+  }
+
+  .table-desinf_trit_desinfecoes,
+  .table-desinf_vinc_desinfecoes {
+    width: 88%;
+    justify-self: center;
+  }
+
+  /* A tabela de seis silos VINC mantém a largura total. */
+  .table-desinf_vinc_silos_8h {
+    width: 100%;
+  }
+
+  /* .metric-card {
       min-height: 16mm;
       padding: 1.2mm 0.7mm;
   }
-
+  
   .metric-label {
       margin-bottom: 0.8mm;
       font-size: 6.5px;
@@ -56,7 +220,17 @@
 
   .metric-value {
       font-size: 10px;
-  }
+  } */
+
+  /* ============================================================
+   Separação visual das secções do relatório
+   ============================================================ */
+
+  /* .report-section + .report-section {
+      margin: 0;
+      padding: 0;
+      border-top: 0;
+  }  
 
   .report-table th {
       padding: 1mm 0.5mm;
@@ -73,28 +247,6 @@
       margin: 0;
   }
   
-  body {
-    font-family: Arial, sans-serif;
-    background: #ffffff;
-    color: #111111;
-    margin: 0;
-    padding: 0;
-  }
-  
-  .page {
-    width: 100%;
-  }
-  
-  .report-header {
-    margin-bottom: 18px;
-  }
-  
-  .report-header h1 {
-    font-size: 20px;
-    margin: 0 0 6px 0;
-    color: #111111;
-  }
-  
   .report-date {
     font-size: 20px;
     color: #c8d2e0;
@@ -105,77 +257,9 @@
     grid-template-columns: 1fr 1fr;
     gap: 18px;
   }
-  
-  .metric-block {
-    min-width: 0;
-    height: auto;
-    align-self: start;
-    border: 1px solid #2b3340;
-    background: #ffffff;
-    align-self: start;
-    height: auto;
-  }
-  
-  .block-title {
-    text-align: center;
-    color: #1f1f1f;
-    font-weight: bold;
-    font-size: 14px;
-    padding: 8px;
-    border-bottom: 1px solid #d0d0d0;
-    background: #f3f4f6;
-    text-transform: uppercase;
-  }
-  
-  .cards-grid.single-card {
-    grid-template-columns: 1fr;
-  }
-
-  .cards-grid {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    height: auto;
-  }
-  
-  .metric-card {
-    /* min-height: 110px; */
-    border-right: 1px solid #2b3340;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    align-items: center;
-    padding: 10px;
-    box-sizing: border-box;
-  }
-  
-  .metric-card:last-child {
-    border-right: none;
-  }
-  
-  .metric-label {
-    font-size: 12px;
-    margin-bottom: 10px;
-    text-align: center;
-  }
-
-  .metric-label-subtitle {
-    font-size: 11px;
-    font-weight: 500;
-    margin-bottom: 12px;
-    opacity: 0.9;
-  }
-  
-  .metric-value {
-    font-size: 20px;
-    font-weight: bold;
-    text-align: center;
-  }
-  /* ============================================================
-   Separação visual das secções do relatório
-   ============================================================ */
 
   .report-section {
-    /* margin-top: 18px; */
+    margin-top: 18px; 
     page-break-inside: avoid;
   }
 
@@ -186,14 +270,20 @@
   }
 
   .report-section + .report-section {
-    /* margin-top: 28px;
-    padding-top: 10px; */
+    margin-top: 28px;
+    padding-top: 10px; 
     border-top: 2px solid #d0d0d0;
   }
 
-  /* Faz blocos com apenas 1 cartão ocuparem a largura inteira */
+   Faz blocos com apenas 1 cartão ocuparem a largura inteira 
   .cards-grid.single-card {
     grid-template-columns: 1fr;
+  }
+
+  .full-width-block {
+    grid-column: 1 / -1;
+    width: 60%;
+    justify-self: center;
   }
 
   .table-block {
@@ -223,12 +313,12 @@
     border: 1px solid #999999;
     text-align: center;
     font-weight: 700;
-    /* font-size: 16px;
-    padding: 10px; */
+    font-size: 16px;
+    padding: 10px; 
   }
   
   .report-table td:first-child {
-    /* text-align: left; */
+    text-align: left;
     text-align: center;
     padding-left: 14px;
   }
@@ -237,7 +327,7 @@
     background: #6b6b6b;
     color: #ffffff;
     font-weight: 800;
-  }
+  } */
 
   /* Cores condicionais em células de tabela */
   .report-table td.cell-ok {

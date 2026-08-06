@@ -1684,3 +1684,786 @@ SELECT
     
 FROM last_values;
 """
+#QUERIES PARA DIA ATUAL
+QUERY_TEMPO_PRODUCAO_MD_ATUAL_00_08 = """
+WITH
+bounds AS (
+  SELECT
+    (%(report_date)s::date + interval '1 day') AT TIME ZONE 'Europe/Lisbon' AS start_ts,
+    (%(report_date)s::date + interval '1 day' + interval '8 hours') AT TIME ZONE 'Europe/Lisbon' AS end_ts
+),
+bounds_eff AS (
+  SELECT
+    start_ts,
+    LEAST(end_ts, now()) AS end_eff
+  FROM bounds
+),
+baseline AS (
+  SELECT
+    b.start_ts,
+    b.end_eff,
+    COALESCE(m.created_at, b.start_ts) AS created_at,
+    COALESCE(m.carga, 0) AS carga,
+    COALESCE(m.funcionamento, 0) AS funcionamento
+  FROM bounds_eff b
+  LEFT JOIN LATERAL (
+    SELECT created_at, carga, funcionamento
+    FROM trituracao.md
+    WHERE created_at < b.start_ts
+      AND created_at >= b.start_ts - interval '12 hours'
+    ORDER BY created_at DESC
+    LIMIT 1
+  ) m ON true
+),
+in_interval AS (
+  SELECT
+    b.start_ts,
+    b.end_eff,
+    m.created_at,
+    m.carga,
+    m.funcionamento
+  FROM bounds_eff b
+  JOIN trituracao.md m
+    ON m.created_at >= b.start_ts
+   AND m.created_at <  b.end_eff
+),
+samples AS (
+  SELECT * FROM baseline
+  UNION ALL
+  SELECT * FROM in_interval
+),
+segments AS (
+  SELECT
+    start_ts,
+    end_eff,
+    created_at,
+    carga,
+    funcionamento,
+    LEAD(created_at) OVER (ORDER BY created_at) AS next_at
+  FROM samples
+),
+durations AS (
+  SELECT
+    EXTRACT(EPOCH FROM (
+      LEAST(
+        COALESCE(next_at, end_eff),
+        created_at + interval '2 minutes',
+        end_eff
+      ) - GREATEST(created_at, start_ts)
+    )) / 60.0 AS minutes,
+    carga,
+    funcionamento
+  FROM segments
+  WHERE LEAST(
+          COALESCE(next_at, end_eff),
+          created_at + interval '2 minutes',
+          end_eff
+        ) > GREATEST(created_at, start_ts)
+),
+agg AS (
+  SELECT
+    COALESCE(SUM(CASE WHEN funcionamento = 1 THEN minutes ELSE 0 END), 0) AS min_func,
+    COALESCE(SUM(CASE WHEN funcionamento = 1 AND carga = 1 THEN minutes ELSE 0 END), 0) AS min_carga
+  FROM durations
+)
+SELECT
+  to_char(make_interval(mins => min_func::int), 'HH24"h"MI')
+  || ' ('
+  || CASE
+       WHEN min_func > 0 THEN ROUND(100.0 * min_carga / min_func)::int
+       ELSE 0
+     END
+  || '%%)' AS "Atual 00-08"
+FROM agg;
+"""
+QUERY_HORAS_MOINHOS_ATUAL_00_08 = """
+WITH
+bounds AS (
+  SELECT
+    (%(report_date)s::date + interval '1 day') AT TIME ZONE 'Europe/Lisbon' AS start_ts,
+    (%(report_date)s::date + interval '1 day' + interval '8 hours') AT TIME ZONE 'Europe/Lisbon' AS end_ts
+),
+bounds_eff AS (
+  SELECT start_ts, LEAST(end_ts, now()) AS end_eff
+  FROM bounds
+),
+in_interval AS (
+  SELECT
+    b.start_ts,
+    b.end_eff,
+    s.sf_id,
+    s.freq_sf,
+    s.created_at
+  FROM bounds_eff b
+  JOIN trituracao.sem_fins s
+    ON s.created_at >= b.start_ts
+   AND s.created_at <  b.end_eff
+  WHERE s.sf_id IN (1, 2, 3, 4, 5)
+),
+baseline AS (
+  SELECT
+    b.start_ts,
+    b.end_eff,
+    s.sf_id,
+    s.freq_sf,
+    s.created_at
+  FROM bounds_eff b
+  JOIN LATERAL (
+    SELECT DISTINCT ON (x.sf_id)
+      x.sf_id,
+      x.freq_sf,
+      x.created_at
+    FROM trituracao.sem_fins x
+    WHERE x.sf_id IN (1, 2, 3, 4, 5)
+      AND x.created_at < b.start_ts
+      AND x.created_at >= b.start_ts - interval '12 hours'
+    ORDER BY x.sf_id, x.created_at DESC
+  ) s ON true
+),
+samples AS (
+  SELECT * FROM baseline
+  UNION ALL
+  SELECT * FROM in_interval
+),
+segments AS (
+  SELECT
+    start_ts,
+    end_eff,
+    sf_id,
+    freq_sf,
+    created_at,
+    LEAD(created_at) OVER (
+      PARTITION BY sf_id
+      ORDER BY created_at
+    ) AS next_at
+  FROM samples
+),
+durations AS (
+  SELECT
+    sf_id,
+    CASE
+      WHEN freq_sf > 1 THEN
+        EXTRACT(EPOCH FROM (
+          LEAST(
+            COALESCE(next_at, end_eff),
+            created_at + interval '2 minutes',
+            end_eff
+          ) - GREATEST(created_at, start_ts)
+        ))
+      ELSE 0
+    END AS work_seconds
+  FROM segments
+  WHERE LEAST(
+          COALESCE(next_at, end_eff),
+          created_at + interval '2 minutes',
+          end_eff
+        ) > GREATEST(created_at, start_ts)
+),
+work_by_sf AS (
+  SELECT sf_id, SUM(work_seconds) AS work_seconds
+  FROM durations
+  GROUP BY sf_id
+),
+result AS (
+  SELECT COALESCE(MAX(work_seconds), 0) AS work_seconds
+  FROM work_by_sf
+)
+SELECT
+  to_char(make_interval(secs => work_seconds::int), 'HH24"h"MI') AS "Atual 00-08"
+FROM result;
+"""
+QUERY_KGS_SILOS_ATUAL_00_08 = """
+WITH
+bounds AS (
+  SELECT
+    (%(report_date)s::date + interval '1 day') AT TIME ZONE 'Europe/Lisbon' AS start_ts,
+    (%(report_date)s::date + interval '1 day' + interval '8 hours') AT TIME ZONE 'Europe/Lisbon' AS end_ts
+),
+in_interval AS (
+  SELECT
+    s.silo_id,
+    s.estado_silo,
+    s.qtd_silo,
+    s.created_at
+  FROM trituracao.silos1a5 s
+  CROSS JOIN bounds b
+  WHERE s.created_at >= b.start_ts
+    AND s.created_at <  b.end_ts
+),
+baseline AS (
+  SELECT
+    s.silo_id,
+    s.estado_silo,
+    s.qtd_silo,
+    s.created_at
+  FROM bounds b
+  JOIN LATERAL (
+    SELECT DISTINCT ON (x.silo_id)
+      x.silo_id,
+      x.estado_silo,
+      x.qtd_silo,
+      x.created_at
+    FROM trituracao.silos1a5 x
+    WHERE x.silo_id BETWEEN 1 AND 5
+      AND x.created_at < b.start_ts
+      AND x.created_at >= b.start_ts - interval '12 hours'
+    ORDER BY x.silo_id, x.created_at DESC
+  ) s ON true
+),
+samples AS (
+  SELECT * FROM baseline
+  UNION ALL
+  SELECT * FROM in_interval
+),
+deltas AS (
+  SELECT
+    silo_id,
+    estado_silo,
+    qtd_silo::numeric AS qtd_silo,
+    qtd_silo::numeric - LAG(qtd_silo::numeric) OVER (
+      PARTITION BY silo_id
+      ORDER BY created_at
+    ) AS delta_kg
+  FROM samples
+)
+SELECT
+  COALESCE(SUM(
+    CASE
+      WHEN estado_silo = 1 AND delta_kg > 0 THEN delta_kg
+      ELSE 0
+    END
+  ), 0) AS "Atual 00-08"
+FROM deltas;
+"""
+QUERY_DESINF_TRIT_KGS_SILOS_ATUAL_00_08 = """
+WITH
+bounds AS (
+  SELECT
+    (%(report_date)s::date + interval '1 day') AT TIME ZONE 'Europe/Lisbon' AS start_ts,
+    (%(report_date)s::date + interval '1 day' + interval '8 hours') AT TIME ZONE 'Europe/Lisbon' AS end_ts
+),
+in_interval AS (
+  SELECT
+    s.silo_id,
+    s.estado_silo,
+    s.qtd_silo,
+    s.created_at
+  FROM desinfecao.silos6a10 s
+  CROSS JOIN bounds b
+  WHERE s.silo_id BETWEEN 6 AND 10
+    AND s.created_at >= b.start_ts
+    AND s.created_at <  b.end_ts
+),
+baseline AS (
+  SELECT
+    s.silo_id,
+    s.estado_silo,
+    s.qtd_silo,
+    s.created_at
+  FROM bounds b
+  JOIN LATERAL (
+    SELECT DISTINCT ON (x.silo_id)
+      x.silo_id,
+      x.estado_silo,
+      x.qtd_silo,
+      x.created_at
+    FROM desinfecao.silos6a10 x
+    WHERE x.silo_id BETWEEN 6 AND 10
+      AND x.created_at < b.start_ts
+      AND x.created_at >= b.start_ts - interval '12 hours'
+    ORDER BY x.silo_id, x.created_at DESC
+  ) s ON true
+),
+samples AS (
+  SELECT * FROM baseline
+  UNION ALL
+  SELECT * FROM in_interval
+),
+deltas AS (
+  SELECT
+    silo_id,
+    estado_silo,
+    qtd_silo::numeric AS qtd_silo,
+    qtd_silo::numeric - LAG(qtd_silo::numeric) OVER (
+      PARTITION BY silo_id
+      ORDER BY created_at
+    ) AS delta_kg
+  FROM samples
+)
+SELECT
+  COALESCE(SUM(
+    CASE
+      WHEN estado_silo = 1 AND delta_kg > 0 THEN delta_kg
+      ELSE 0
+    END
+  ), 0) AS "Atual 00-08"
+FROM deltas;
+"""
+QUERY_CALIB_GRANULADO_ATUAL_00_08 = """
+WITH
+bounds AS (
+  SELECT
+    (%(report_date)s::date + interval '1 day') AT TIME ZONE 'Europe/Lisbon' AS start_ts,
+    (%(report_date)s::date + interval '1 day' + interval '8 hours') AT TIME ZONE 'Europe/Lisbon' AS end_ts
+),
+products AS (
+  SELECT * FROM (VALUES
+    ('05A1', '05_1'),
+    ('1A2',  '1_2'),
+    ('2A3',  '2_3'),
+    ('3A7',  '3_7')
+  ) p(produto_label, col_name)
+),
+product_values AS (
+  SELECT
+    p.produto_label AS produto,
+    GREATEST(
+      COALESCE((
+        SELECT CASE p.col_name
+          WHEN '05_1' THEN g."05_1"
+          WHEN '1_2'  THEN g."1_2"
+          WHEN '2_3'  THEN g."2_3"
+          WHEN '3_7'  THEN g."3_7"
+        END::numeric
+        FROM calibracao.granulados g
+        CROSS JOIN bounds b
+        WHERE g.created_at <= b.end_ts
+        ORDER BY g.created_at DESC
+        LIMIT 1
+      ), 0)
+      -
+      COALESCE((
+        SELECT CASE p.col_name
+          WHEN '05_1' THEN g."05_1"
+          WHEN '1_2'  THEN g."1_2"
+          WHEN '2_3'  THEN g."2_3"
+          WHEN '3_7'  THEN g."3_7"
+        END::numeric
+        FROM calibracao.granulados g
+        CROSS JOIN bounds b
+        WHERE g.created_at <= b.start_ts
+        ORDER BY g.created_at DESC
+        LIMIT 1
+      ), 0),
+      0
+    ) AS kg_atual
+  FROM products p
+),
+all_rows AS (
+  SELECT produto, kg_atual
+  FROM product_values
+
+  UNION ALL
+
+  SELECT 'Total' AS produto, SUM(kg_atual) AS kg_atual
+  FROM product_values
+)
+SELECT
+  produto,
+  ROUND(kg_atual, 0) AS "Atual 00-08"
+FROM all_rows
+ORDER BY CASE produto
+  WHEN '05A1' THEN 1
+  WHEN '1A2' THEN 2
+  WHEN '2A3' THEN 3
+  WHEN '3A7' THEN 4
+  WHEN 'Total' THEN 5
+  ELSE 99
+END;
+"""
+QUERY_CALIB_OEE_ATUAL_00_08 = """
+WITH
+params_oee AS (
+  SELECT 1250::numeric AS cadencia_kg_h
+),
+bounds AS (
+  SELECT
+    (%(report_date)s::date + interval '1 day') AT TIME ZONE 'Europe/Lisbon' AS start_ts,
+    (%(report_date)s::date + interval '1 day' + interval '8 hours') AT TIME ZONE 'Europe/Lisbon' AS end_ts,
+    28800.0 AS planned_s
+),
+produced AS (
+  SELECT
+    GREATEST(
+      COALESCE((
+        SELECT g.total::numeric
+        FROM calibracao.granulados g
+        CROSS JOIN bounds b
+        WHERE g.created_at <= b.end_ts
+        ORDER BY g.created_at DESC
+        LIMIT 1
+      ), 0)
+      -
+      COALESCE((
+        SELECT g.total::numeric
+        FROM calibracao.granulados g
+        CROSS JOIN bounds b
+        WHERE g.created_at <= b.start_ts
+        ORDER BY g.created_at DESC
+        LIMIT 1
+      ), 0),
+      0
+    ) AS kg_produzidos
+),
+remoagem_filtrada AS (
+  SELECT
+    r.created_at,
+    CASE
+      WHEN COALESCE(r.status_rotex_m23, 0) = 1
+        OR COALESCE(r.status_rotex_m45, 0) = 1
+      THEN 1 ELSE 0
+    END AS algum_rotex_on
+  FROM mov_granulados.remoagem r
+  CROSS JOIN bounds b
+  WHERE r.created_at >= b.start_ts
+    AND r.created_at <  b.end_ts
+),
+silos_base AS (
+  SELECT DISTINCT ON (s.silo_id)
+    s.silo_id,
+    s.estado_silo,
+    b.start_ts AS created_at
+  FROM desinfecao.silos6a10 s
+  CROSS JOIN bounds b
+  WHERE s.silo_id BETWEEN 6 AND 10
+    AND s.created_at < b.start_ts
+  ORDER BY s.silo_id, s.created_at DESC
+),
+silos_intervalo AS (
+  SELECT s.silo_id, s.estado_silo, s.created_at
+  FROM desinfecao.silos6a10 s
+  CROSS JOIN bounds b
+  WHERE s.silo_id BETWEEN 6 AND 10
+    AND s.created_at >= b.start_ts
+    AND s.created_at <  b.end_ts
+),
+silos_samples AS (
+  SELECT * FROM silos_base
+  UNION ALL
+  SELECT * FROM silos_intervalo
+),
+silos_segmentos AS (
+  SELECT
+    silo_id,
+    estado_silo,
+    created_at AS seg_start,
+    LEAD(created_at, 1, (SELECT end_ts FROM bounds)) OVER (
+      PARTITION BY silo_id
+      ORDER BY created_at
+    ) AS seg_end
+  FROM silos_samples
+),
+estado_por_ts AS (
+  SELECT
+    r.created_at,
+    r.algum_rotex_on,
+    COALESCE(MAX(CASE WHEN ss.estado_silo = 2 THEN 1 ELSE 0 END), 0) AS algum_silo_vazar
+  FROM remoagem_filtrada r
+  LEFT JOIN silos_segmentos ss
+    ON r.created_at >= ss.seg_start
+   AND r.created_at <  ss.seg_end
+  GROUP BY r.created_at, r.algum_rotex_on
+),
+status_segments AS (
+  SELECT
+    e.created_at,
+    COALESCE(
+      LEAD(e.created_at) OVER (ORDER BY e.created_at),
+      (SELECT end_ts FROM bounds)
+    ) AS next_ts,
+    e.algum_rotex_on,
+    e.algum_silo_vazar
+  FROM estado_por_ts e
+),
+durations AS (
+  SELECT
+    EXTRACT(EPOCH FROM (
+      GREATEST(
+        interval '0 second',
+        LEAST(next_ts, (SELECT end_ts FROM bounds)) - created_at
+      )
+    )) AS dur_s,
+    algum_rotex_on,
+    algum_silo_vazar
+  FROM status_segments
+),
+time_values AS (
+  SELECT
+    b.planned_s,
+    COALESCE(SUM(CASE
+      WHEN d.algum_rotex_on = 1 AND d.algum_silo_vazar = 1 THEN d.dur_s
+      ELSE 0
+    END), 0) AS tempo_produtivo_s,
+    COALESCE(SUM(CASE
+      WHEN d.algum_rotex_on = 1 AND d.algum_silo_vazar = 0 THEN d.dur_s
+      ELSE 0
+    END), 0) AS tempo_sem_granulado_s,
+    COALESCE(SUM(CASE
+      WHEN d.algum_rotex_on = 0 THEN d.dur_s
+      ELSE 0
+    END), 0) AS tempo_seccao_desligada_s
+  FROM bounds b
+  LEFT JOIN durations d ON true
+  GROUP BY b.planned_s
+),
+kpis AS (
+  SELECT
+    p.kg_produzidos,
+    t.planned_s,
+    t.tempo_produtivo_s,
+    t.tempo_sem_granulado_s,
+    t.tempo_seccao_desligada_s,
+    CASE
+      WHEN t.planned_s > 0 THEN
+        100.0 * GREATEST(t.planned_s - t.tempo_sem_granulado_s, 0) / t.planned_s
+      ELSE 0
+    END AS disponibilidade_pct,
+    CASE
+      WHEN t.tempo_produtivo_s > 0 THEN
+        100.0 * p.kg_produzidos
+        / ((t.tempo_produtivo_s / 3600.0) * po.cadencia_kg_h)
+      ELSE 0
+    END AS performance_pct
+  FROM produced p
+  CROSS JOIN time_values t
+  CROSS JOIN params_oee po
+)
+SELECT
+  'Performance' AS "Indicador",
+  ROUND(LEAST(100.0, performance_pct), 1) AS "Atual 00-08"
+FROM kpis
+
+UNION ALL
+
+SELECT
+  'Disponibilidade' AS "Indicador",
+  ROUND(LEAST(100.0, disponibilidade_pct), 1) AS "Atual 00-08"
+FROM kpis
+
+UNION ALL
+
+SELECT
+  'OEE' AS "Indicador",
+  ROUND(LEAST(100.0, (performance_pct * disponibilidade_pct) / 100.0), 1) AS "Atual 00-08"
+FROM kpis
+
+UNION ALL
+
+SELECT
+  'Tempo Trabalho sem granulado' AS "Indicador",
+  ROUND(tempo_sem_granulado_s, 0) AS "Atual 00-08"
+FROM kpis
+
+UNION ALL
+
+SELECT
+  'Tempo Secção Desligada' AS "Indicador",
+  ROUND(tempo_seccao_desligada_s, 0) AS "Atual 00-08"
+FROM kpis;
+"""
+QUERY_DESINF_TRIT_DESINFECOES_ATUAL_00_08 = """
+WITH
+bounds AS (
+  SELECT
+    (%(report_date)s::date + interval '1 day')::timestamp AS start_local,
+    (%(report_date)s::date + interval '1 day' + interval '8 hours')::timestamp AS end_local
+),
+raw_data AS (
+  SELECT 'VAPEX 5' AS vapex, record_id, created_at,
+         (created_at AT TIME ZONE 'Europe/Lisbon')::timestamp AS created_at_local,
+         operation_id, tempo_teorico
+  FROM desinfecao.machine_5
+  UNION ALL
+  SELECT 'VAPEX 6', record_id, created_at,
+         (created_at AT TIME ZONE 'Europe/Lisbon')::timestamp,
+         operation_id, tempo_teorico
+  FROM desinfecao.machine_6
+  UNION ALL
+  SELECT 'VAPEX 7', record_id, created_at,
+         (created_at AT TIME ZONE 'Europe/Lisbon')::timestamp,
+         operation_id, tempo_teorico
+  FROM desinfecao.machine_7
+  UNION ALL
+  SELECT 'VAPEX 8', record_id, created_at,
+         (created_at AT TIME ZONE 'Europe/Lisbon')::timestamp,
+         operation_id, tempo_teorico
+  FROM desinfecao.machine_8
+  UNION ALL
+  SELECT 'VAPEX 9', record_id, created_at,
+         (created_at AT TIME ZONE 'Europe/Lisbon')::timestamp,
+         operation_id, tempo_teorico
+  FROM desinfecao.machine_9
+),
+base_data AS (
+  SELECT
+    r.*,
+    LAG(operation_id) OVER (
+      PARTITION BY vapex
+      ORDER BY created_at, record_id
+    ) AS prev_operation_id
+  FROM raw_data r
+  CROSS JOIN bounds b
+  WHERE r.created_at_local >= b.start_local - interval '12 hours'
+    AND r.created_at_local <  b.end_local + interval '12 hours'
+    AND r.operation_id IS NOT NULL
+),
+marked AS (
+  SELECT *,
+    CASE WHEN prev_operation_id IS DISTINCT FROM operation_id THEN 1 ELSE 0 END AS new_cycle
+  FROM base_data
+),
+groups AS (
+  SELECT *,
+    SUM(new_cycle) OVER (
+      PARTITION BY vapex
+      ORDER BY created_at, record_id
+    ) AS cycle_group
+  FROM marked
+),
+cycles AS (
+  SELECT
+    vapex,
+    cycle_group,
+    MIN(created_at_local) + (MAX(tempo_teorico) * interval '1 minute') AS scheduled_end_local,
+    MAX(tempo_teorico) AS tempo_teorico
+  FROM groups
+  GROUP BY vapex, cycle_group
+),
+counts AS (
+  SELECT vapex, COUNT(*) AS current_count
+  FROM cycles
+  CROSS JOIN bounds b
+  WHERE tempo_teorico > 45
+    AND scheduled_end_local >= b.start_local
+    AND scheduled_end_local <  b.end_local
+  GROUP BY vapex
+),
+all_vapex AS (
+  SELECT * FROM (VALUES
+    ('VAPEX 5'), ('VAPEX 6'), ('VAPEX 7'), ('VAPEX 8'), ('VAPEX 9')
+  ) v(vapex)
+),
+rows_vapex AS (
+  SELECT a.vapex, COALESCE(c.current_count, 0) AS current_count
+  FROM all_vapex a
+  LEFT JOIN counts c USING (vapex)
+),
+all_rows AS (
+  SELECT vapex, current_count FROM rows_vapex
+  UNION ALL
+  SELECT 'TOTAL', SUM(current_count) FROM rows_vapex
+)
+SELECT
+  vapex AS "VAPEX",
+  current_count AS "Atual 00-08"
+FROM all_rows
+ORDER BY CASE vapex
+  WHEN 'VAPEX 5' THEN 1
+  WHEN 'VAPEX 6' THEN 2
+  WHEN 'VAPEX 7' THEN 3
+  WHEN 'VAPEX 8' THEN 4
+  WHEN 'VAPEX 9' THEN 5
+  WHEN 'TOTAL' THEN 6
+  ELSE 99
+END;
+"""
+QUERY_DESINF_VINC_DESINFECOES_ATUAL_00_08 = """
+WITH
+bounds AS (
+  SELECT
+    (%(report_date)s::date + interval '1 day')::timestamp AS start_local,
+    (%(report_date)s::date + interval '1 day' + interval '8 hours')::timestamp AS end_local
+),
+raw_data AS (
+  SELECT 'VAPEX 1' AS vapex, record_id, created_at,
+         (created_at AT TIME ZONE 'Europe/Lisbon')::timestamp AS created_at_local,
+         operation_id, tempo_teorico
+  FROM desinfecao.machine_1
+  UNION ALL
+  SELECT 'VAPEX 2', record_id, created_at,
+         (created_at AT TIME ZONE 'Europe/Lisbon')::timestamp,
+         operation_id, tempo_teorico
+  FROM desinfecao.machine_2
+  UNION ALL
+  SELECT 'VAPEX 3', record_id, created_at,
+         (created_at AT TIME ZONE 'Europe/Lisbon')::timestamp,
+         operation_id, tempo_teorico
+  FROM desinfecao.machine_3
+  UNION ALL
+  SELECT 'VAPEX 4', record_id, created_at,
+         (created_at AT TIME ZONE 'Europe/Lisbon')::timestamp,
+         operation_id, tempo_teorico
+  FROM desinfecao.machine_4
+),
+base_data AS (
+  SELECT
+    r.*,
+    LAG(operation_id) OVER (
+      PARTITION BY vapex
+      ORDER BY created_at, record_id
+    ) AS prev_operation_id
+  FROM raw_data r
+  CROSS JOIN bounds b
+  WHERE r.created_at_local >= b.start_local - interval '12 hours'
+    AND r.created_at_local <  b.end_local + interval '12 hours'
+    AND r.operation_id IS NOT NULL
+),
+marked AS (
+  SELECT *,
+    CASE WHEN prev_operation_id IS DISTINCT FROM operation_id THEN 1 ELSE 0 END AS new_cycle
+  FROM base_data
+),
+groups AS (
+  SELECT *,
+    SUM(new_cycle) OVER (
+      PARTITION BY vapex
+      ORDER BY created_at, record_id
+    ) AS cycle_group
+  FROM marked
+),
+cycles AS (
+  SELECT
+    vapex,
+    cycle_group,
+    MIN(created_at_local) + (MAX(tempo_teorico) * interval '1 minute') AS scheduled_end_local,
+    MAX(tempo_teorico) AS tempo_teorico
+  FROM groups
+  GROUP BY vapex, cycle_group
+),
+counts AS (
+  SELECT vapex, COUNT(*) AS current_count
+  FROM cycles
+  CROSS JOIN bounds b
+  WHERE tempo_teorico > 45
+    AND scheduled_end_local >= b.start_local
+    AND scheduled_end_local <  b.end_local
+  GROUP BY vapex
+),
+all_vapex AS (
+  SELECT * FROM (VALUES
+    ('VAPEX 1'), ('VAPEX 2'), ('VAPEX 3'), ('VAPEX 4')
+  ) v(vapex)
+),
+rows_vapex AS (
+  SELECT a.vapex, COALESCE(c.current_count, 0) AS current_count
+  FROM all_vapex a
+  LEFT JOIN counts c USING (vapex)
+),
+all_rows AS (
+  SELECT vapex, current_count FROM rows_vapex
+  UNION ALL
+  SELECT 'TOTAL', SUM(current_count) FROM rows_vapex
+)
+SELECT
+  vapex AS "VAPEX",
+  current_count AS "Atual 00-08"
+FROM all_rows
+ORDER BY CASE vapex
+  WHEN 'VAPEX 1' THEN 1
+  WHEN 'VAPEX 2' THEN 2
+  WHEN 'VAPEX 3' THEN 3
+  WHEN 'VAPEX 4' THEN 4
+  WHEN 'TOTAL' THEN 5
+  ELSE 99
+END;
+"""

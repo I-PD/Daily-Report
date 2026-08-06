@@ -39,6 +39,14 @@ from queries import (
     QUERY_CALIB_OEE_TABELA_DIA_ANTERIOR,
     QUERY_DESINF_TRIT_DIA_ANTERIOR,
     QUERY_DESINF_VINC_8H,
+    QUERY_TEMPO_PRODUCAO_MD_ATUAL_00_08,
+    QUERY_HORAS_MOINHOS_ATUAL_00_08,
+    QUERY_KGS_SILOS_ATUAL_00_08,
+    QUERY_DESINF_TRIT_KGS_SILOS_ATUAL_00_08,
+    QUERY_CALIB_GRANULADO_ATUAL_00_08,
+    QUERY_CALIB_OEE_ATUAL_00_08,
+    QUERY_DESINF_TRIT_DESINFECOES_ATUAL_00_08,
+    QUERY_DESINF_VINC_DESINFECOES_ATUAL_00_08,
 )
 
 # Configuração base do projeto
@@ -330,7 +338,6 @@ def run_single_row_query(conn, query_name: str, query: str, params: dict | None 
     #         row = cur.fetchone()
 
     if not row:
-        #raise RuntimeError("A query não devolveu resultados.")
         raise RuntimeError(f"A query {query_name!r} não devolveu resultados.")
 
     ordered_labels = ["T1(00-08)", "T2(08-16)", "T3(16-24)", "TOTAL"]
@@ -417,7 +424,13 @@ def get_report_days_to_send(conn, now: datetime) -> list[date]:
     return []
 
 # Construção dos blocos do relatório
-def build_standard_block(key: str, title: str, values: dict[str, object]) -> MetricBlock:
+def build_standard_block(
+        key: str, 
+        title: str, 
+        values: dict[str, object],
+        current_value: object | None = None,
+        current_label: str = "Atual 00-08"
+) -> MetricBlock:
     """
     Constrói um bloco 'normal' do relatório:
     - Tempo Produção MD
@@ -440,13 +453,29 @@ def build_standard_block(key: str, title: str, values: dict[str, object]) -> Met
             )
         )
 
+    if current_value is not None:
+        cards.append(
+            MetricCard(
+                label=current_label,
+                value=str(current_value),
+                bg_color="#5794f2",
+                text_color="#ffffff",
+            )
+        )
+
     return MetricBlock(
         key=key,
         title=title,
         cards=cards,
     )
 
-def build_kg_block(key: str, title: str, values: dict[str, object]) -> MetricBlock:
+def build_kg_block(
+        key: str, 
+        title: str, 
+        values: dict[str, object],
+        current_value: object | None = None,
+        current_label: str = "Atual 00-08"
+) -> MetricBlock:
     cards: list[MetricCard] = []
 
     for label in ["T1(00-08)", "T2(08-16)", "T3(16-24)", "TOTAL"]:
@@ -461,6 +490,16 @@ def build_kg_block(key: str, title: str, values: dict[str, object]) -> MetricBlo
             )
         )
 
+    if current_value is not None:
+        cards.append(
+            MetricCard(
+                label=current_label,
+                value=format_kg(current_value),
+                bg_color="#5794f2",
+                text_color="#ffffff",
+            )
+        )
+
     return MetricBlock(
         key=key,
         title=title,
@@ -468,7 +507,15 @@ def build_kg_block(key: str, title: str, values: dict[str, object]) -> MetricBlo
     )
 
 # Builder da tabela de Calibração
-def build_calibracao_granulado_block(rows: list[dict[str, object]]) -> ReportTableBlock:
+def build_calibracao_granulado_block(
+        rows: list[dict[str, object]],
+        current_rows: list[dict[str, object]],
+        current_label: str,
+) -> ReportTableBlock:
+    current_by_product = {
+        str(row.get("produto", "")): row.get("Atual 00-08", 0)
+        for row in current_rows
+    }
     formatted_rows: list[dict[str, object]] = []
 
     for row in rows:
@@ -481,6 +528,8 @@ def build_calibracao_granulado_block(rows: list[dict[str, object]]) -> ReportTab
             "T3(14-22)": format_kg(row.get("T3(14-22)", 0)),
             "Total (Kg)": format_kg(row.get("Total (Kg)", 0)),
             "%": "" if produto == "Total" else format_pct(row.get("Percentagem", 0)),
+            current_label: format_kg(current_by_product.get(produto, 0)),
+            "_header_styles": {current_label: "blue"},
         })
 
     return ReportTableBlock(
@@ -493,12 +542,17 @@ def build_calibracao_granulado_block(rows: list[dict[str, object]]) -> ReportTab
             "T3(14-22)",
             "Total (Kg)",
             "%",
+            current_label,
         ],
         rows=formatted_rows,
     )
 
 # Builder da tabela OEE Calibração - Dia Anterior
-def build_calibracao_oee_block(rows: list[dict[str, object]]) -> ReportTableBlock:
+def build_calibracao_oee_block(
+        rows: list[dict[str, object]],
+        current_rows: list[dict[str, object]],
+        current_label: str,
+) -> ReportTableBlock:
     """
     Constrói a tabela de Performance / Disponibilidade / OEE /
     Tempo Trabalho sem granulado.
@@ -512,7 +566,13 @@ def build_calibracao_oee_block(rows: list[dict[str, object]]) -> ReportTableBloc
         "T2(06-14)",
         "T3(14-22)",
         "Dia",
+        current_label,
     ]
+
+    current_by_indicator = {
+        str(row.get("Indicador", "")): row.get("Atual 00-08", 0)
+        for row in current_rows
+    }
 
     formatted_rows: list[dict[str, object]] = []
 
@@ -521,6 +581,7 @@ def build_calibracao_oee_block(rows: list[dict[str, object]]) -> ReportTableBloc
         formatted_row: dict[str, object] = {
             "Indicador": indicador,
             "_styles": {},
+            "_header_styles": {current_label: "blue"},
         }
 
         for col in ["T1(22-06)", "T2(06-14)", "T3(14-22)", "Dia"]:
@@ -536,6 +597,15 @@ def build_calibracao_oee_block(rows: list[dict[str, object]]) -> ReportTableBloc
                 if indicador == "OEE":
                     formatted_row["_styles"][col] = get_oee_calib_style(raw_value)
 
+        current_value = float(current_by_indicator.get(indicador, 0) or 0)
+        if indicador in ["Tempo Trabalho sem granulado", "Tempo Secção Desligada"]:
+            formatted_row[current_label] = format_seconds_hhmmss(current_value)
+            formatted_row["_styles"][current_label] = get_tempo_sem_granulado_style(current_value)
+        else:
+            formatted_row[current_label] = format_pct(current_value)
+            if indicador == "OEE":
+                formatted_row["_styles"][current_label] = get_oee_calib_style(current_value)
+
         formatted_rows.append(formatted_row)
 
     return ReportTableBlock(
@@ -546,20 +616,26 @@ def build_calibracao_oee_block(rows: list[dict[str, object]]) -> ReportTableBloc
     )
 
 # Builder da tabela Desinfeção VINC
-def build_desinf_vinc_desinfecoes_block(rows: list[dict[str, object]]) -> ReportTableBlock:
+def build_desinf_vinc_desinfecoes_block(
+        rows: list[dict[str, object]],
+        current_rows: list[dict[str, object]],
+        current_label: str,
+) -> ReportTableBlock:
+    current_by_vapex = {
+        str(row.get("VAPEX", "")): int(row.get("Atual 00-08", 0) or 0)
+        for row in current_rows
+    }
     formatted_rows: list[dict[str, object]] = []
 
     for row in rows:
         vapex = str(row.get("VAPEX", ""))
         is_total_row = vapex == "TOTAL"
 
-        # t1 = int(row.get("T1(00-08)", 0) or 0)
-        # t2 = int(row.get("T2(08-16)", 0) or 0)
-        # t3 = int(row.get("T3(16-24)", 0) or 0)
         t1 = int(row["t1"] or 0)
         t2 = int(row["t2"] or 0)
         t3 = int(row["t3"] or 0)
         total = int(row.get("Total", 0) or 0)
+        current = current_by_vapex.get(vapex, 0)
 
         formatted_rows.append({
             "VAPEX": vapex,
@@ -567,12 +643,15 @@ def build_desinf_vinc_desinfecoes_block(rows: list[dict[str, object]]) -> Report
             "T2(08-16)": t2,
             "T3(16-24)": t3,
             "Total": total,
+            current_label: current,
             # estilos por célula
             "_styles": {} if is_total_row else {
                 "T1(00-08)": "ok" if t1 >= 4 else "bad",
                 "T2(08-16)": "ok" if t2 >= 4 else "bad",
                 "T3(16-24)": "ok" if t3 >= 4 else "bad",
-            }
+                current_label: "ok" if current >= 4 else "bad",
+            },
+            "_header_styles": {current_label: "blue"},
         })
 
     return ReportTableBlock(
@@ -584,25 +663,32 @@ def build_desinf_vinc_desinfecoes_block(rows: list[dict[str, object]]) -> Report
             "T2(08-16)",
             "T3(16-24)",
             "Total",
+            current_label,
         ],
         rows=formatted_rows,
     )
 
 # Builder de Desinfeção Trituração - Dia Anterior
-def build_desinf_trit_desinfecoes_block(rows: list[dict[str, object]]) -> ReportTableBlock:
+def build_desinf_trit_desinfecoes_block(
+        rows: list[dict[str, object]],
+        current_rows: list[dict[str, object]],
+        current_label: str,
+) -> ReportTableBlock:
+    current_by_vapex = {
+        str(row.get("VAPEX", "")): int(row.get("Atual 00-08", 0) or 0)
+        for row in current_rows
+    }
     formatted_rows: list[dict[str, object]] = []
 
     for row in rows:
         vapex = str(row.get("VAPEX", ""))
         is_total_row = vapex == "TOTAL"
 
-        # t1 = int(row.get("T1(00-08)", 0) or 0)
-        # t2 = int(row.get("T2(08-16)", 0) or 0)
-        # t3 = int(row.get("T3(16-24)", 0) or 0)
         t1 = int(row["t1"] or 0)
         t2 = int(row["t2"] or 0)
         t3 = int(row["t3"] or 0)
         total = int(row.get("Total", 0) or 0)
+        current = current_by_vapex.get(vapex, 0)
 
         formatted_rows.append({
             "VAPEX": vapex,
@@ -610,11 +696,14 @@ def build_desinf_trit_desinfecoes_block(rows: list[dict[str, object]]) -> Report
             "T2(08-16)": t2,
             "T3(16-24)": t3,
             "Total": total,
+            current_label: current,
             "_styles": {} if is_total_row else {
                 "T1(00-08)": "ok" if t1 >= 4 else "bad",
                 "T2(08-16)": "ok" if t2 >= 4 else "bad",
                 "T3(16-24)": "ok" if t3 >= 4 else "bad",
-            }
+                current_label: "ok" if current >= 4 else "bad",
+            },
+            "_header_styles": {current_label: "blue"},
         })
 
     return ReportTableBlock(
@@ -626,6 +715,7 @@ def build_desinf_trit_desinfecoes_block(rows: list[dict[str, object]]) -> Report
             "T2(08-16)",
             "T3(16-24)",
             "Total",
+            current_label,
         ],
         rows=formatted_rows,
     )
@@ -661,7 +751,6 @@ def build_desinf_vinc_silos_8h_block(
 
     return ReportTableBlock(
         key="desinf_vinc_silos_8h",
-        #title=f"Peso Silos Desinfeção VINC às 8h ({get_today_local_date()})",
         title=(
             "Peso Silos Desinfeção VINC às 8h "
             f"({snapshot_label})"
@@ -680,16 +769,7 @@ def run_scalar_query(conn, query_name: str, query: str, params: dict | None = No
 
     row = execute_query(conn=conn,query_name=query_name,query=query,params=params,fetch_mode="one",)
 
-    # with get_db_connection() as conn:
-    #     with conn.cursor() as cur:
-    #         if params:
-    #             cur.execute(query, params)
-    #         else:
-    #             cur.execute(query)
-    #         row = cur.fetchone()
-
     if not row:
-        #raise RuntimeError("A query escalar não devolveu resultados.")
         raise RuntimeError(f"A query {query_name!r} não devolveu resultados.")
 
     return next(iter(row.values()))
@@ -699,13 +779,6 @@ def run_single_vinc_row_query(conn, query_name: str, query: str, params: dict | 
     Executa uma query de uma linha, mas devolve TODAS as colunas.
     Usar para tabelas que não têm T1/T2/T3/TOTAL.
     """
-    # with get_db_connection() as conn:
-    #     with conn.cursor() as cur:
-    #         if params:
-    #             cur.execute(query, params)
-    #         else:
-    #             cur.execute(query)
-    #         row = cur.fetchone()
 
     row = execute_query(conn=conn,query_name=query_name,query=query,params=params,fetch_mode="one",)
 
@@ -715,14 +788,20 @@ def run_single_vinc_row_query(conn, query_name: str, query: str, params: dict | 
 
     return dict(row)
 
-def build_single_total_block(title: str, value: object, suffix: str = "") -> MetricBlock:
+def build_single_total_block(
+        key:str,
+        title: str, 
+        value: object, 
+        suffix: str = ""
+) -> MetricBlock:
     """
     Constrói um bloco com um único cartão grande.
     """
     #text_value = f"{value}{suffix}" if suffix else str(value)
 
     return MetricBlock(
-        key="total_silos_8h",
+        # key="total_silos_8h",
+        key=key,
         title=title,
         cards=[
             MetricCard(
@@ -767,16 +846,15 @@ def build_oee_block(values: dict[str, object]) -> MetricBlock:
 # 2) Separar os blocos por secção
 # 3) Devolver uma estrutura organizada para o PDF e para o e-mail
 def get_daily_sections(conn, report_date: datetime) -> list[ReportSection]:
-    #today_label = get_today_local_date()
-    # report_date_label = get_report_date().strftime("%d/%m/%Y")
     report_date_label = report_date.strftime("%d/%m/%Y")
-
+    current_date = report_date + timedelta(days=1)
     # O estado dos silos é medido às 08h do dia seguinte.
     # Exemplo:
     # relatório sexta -> sábado às 08h
     snapshot_label = (
         report_date + timedelta(days=1)
     ).strftime("%d/%m/%Y")
+    current_label = f"Atual 00-08 ({current_date:%d/%m})"
 
     query_params = {
         "report_date": report_date.date()
@@ -795,18 +873,36 @@ def get_daily_sections(conn, report_date: datetime) -> list[ReportSection]:
         QUERY_TEMPO_PRODUCAO_MD, 
         query_params,
     )
+    tempo_current = run_single_vinc_row_query(
+        conn, 
+        "tempo_producao_md_atual_00_08", 
+        QUERY_TEMPO_PRODUCAO_MD_ATUAL_00_08, 
+        query_params,
+    ).get("Atual 00-08", "00h00 (0%)")
     horas_values = run_single_row_query(
         conn,
         "horas_moinhos",
         QUERY_HORAS_MOINHOS, 
         query_params,
     )
+    horas_current = run_single_vinc_row_query(
+        conn, 
+        "horas_moinhos_atual_00_08", 
+        QUERY_HORAS_MOINHOS_ATUAL_00_08, 
+        query_params,
+    ).get("Atual 00-08", "00h00")
     kgs_values = run_single_row_query(
         conn,
         "kgs_silos_1a5",
         QUERY_KGS_SILOS, 
         query_params,
     )
+    kgs_current = run_single_vinc_row_query(
+        conn, 
+        "kgs_silos_1a5_atual_00_08", 
+        QUERY_KGS_SILOS_ATUAL_00_08, 
+        query_params,
+    ).get("Atual 00-08", 0)
     oee_values = run_single_row_query(
         conn,
         "oee_trituracao",
@@ -819,19 +915,26 @@ def get_daily_sections(conn, report_date: datetime) -> list[ReportSection]:
             "tempo_producao_md",
             "Tempo Produção MD",
             tempo_values,
+            tempo_current,
+            current_label,
         ),
         build_standard_block(
             "horas_moinhos",
             "Nº Horas Trabalhadas (Moinhos)",
             horas_values,
+            horas_current,
+            current_label,
         ),
         build_kg_block(
             "kgs_silos",
             "Kgs Produzidos (Silos 1 a 5)",
             kgs_values,
+            kgs_current,
+            current_label,
         ),
         build_oee_block(oee_values),
         build_single_total_block(
+            "trit_total_silos_8h",
             f"Total Silos AD 1 a 5 às 8h ({snapshot_label})",
             total_silos_8h,
         ),
@@ -844,6 +947,13 @@ def get_daily_sections(conn, report_date: datetime) -> list[ReportSection]:
         QUERY_DESINF_TRIT_KGS_SILOS_DIA_ANTERIOR,
         query_params,
     )
+
+    desinf_kgs_current = run_single_vinc_row_query(
+        conn, 
+        "desinf_kgs_silos_6a10_atual_00_08",
+        QUERY_DESINF_TRIT_KGS_SILOS_ATUAL_00_08,
+        query_params,
+    ).get("Atual 00-08", 0)
 
     desinf_total_silos_8h = run_scalar_query(
         conn,
@@ -859,17 +969,31 @@ def get_daily_sections(conn, report_date: datetime) -> list[ReportSection]:
         query_params,
     )
 
+    desinf_trit_current_rows = run_multi_row_query(
+        conn, 
+        "desinf_trit_desinfecoes_atual_00_08",
+        QUERY_DESINF_TRIT_DESINFECOES_ATUAL_00_08,
+        query_params,
+    )
+
     desinf_blocks = [
         build_kg_block(
             "desinf_kgs_silos",
             "Kgs Produzidos (Silos 6 a 10)",
             desinf_kgs_values,
+            desinf_kgs_current,
+            current_label,
         ),
         build_single_total_block(
+            "desinf_total_silos_8h",
             f"Total Silos PD 6 a 10 às 8h ({snapshot_label})",
             desinf_total_silos_8h,
         ),
-        build_desinf_trit_desinfecoes_block(desinf_trit_rows),
+        build_desinf_trit_desinfecoes_block(
+            desinf_trit_rows,
+            desinf_trit_current_rows,
+            current_label,
+        ),
     ]
 
     # Secção: Calibração
@@ -880,6 +1004,13 @@ def get_daily_sections(conn, report_date: datetime) -> list[ReportSection]:
         query_params,
     )
 
+    calibracao_current_rows = run_multi_row_query(
+        conn, 
+        "calibracao_granulado_atual_00_08",
+        QUERY_CALIB_GRANULADO_ATUAL_00_08,
+        query_params,
+    )
+
     calibracao_oee_rows = run_multi_row_query(
         conn,
         "calibracao_oee",
@@ -887,9 +1018,23 @@ def get_daily_sections(conn, report_date: datetime) -> list[ReportSection]:
         query_params,
     )
 
+    calibracao_oee_current_rows = run_multi_row_query(
+        conn, "calibracao_oee_atual_00_08",
+        QUERY_CALIB_OEE_ATUAL_00_08,
+        query_params,
+    )
+
     calibracao_blocks = [
-        build_calibracao_granulado_block(calibracao_rows),
-        build_calibracao_oee_block(calibracao_oee_rows),
+        build_calibracao_granulado_block(
+            calibracao_rows,
+            calibracao_current_rows,
+            current_label,
+        ),
+        build_calibracao_oee_block(
+            calibracao_oee_rows,
+            calibracao_oee_current_rows,
+            current_label,
+        ),
     ]
 
     # Secção: Desinfeção VINC
@@ -907,12 +1052,23 @@ def get_daily_sections(conn, report_date: datetime) -> list[ReportSection]:
         query_params,
     )
 
+    desinf_vinc_current_rows = run_multi_row_query(
+        conn, 
+        "desinf_vinc_desinfecoes_atual_00_08",
+        QUERY_DESINF_VINC_DESINFECOES_ATUAL_00_08,
+        query_params,
+    )
+
     desinf_vinc_blocks = [
-        build_desinf_vinc_desinfecoes_block(desinf_vinc_rows),
+        build_desinf_vinc_desinfecoes_block(
+            desinf_vinc_rows,
+            desinf_vinc_current_rows,
+            current_label,
+        ),
         build_desinf_vinc_silos_8h_block(
             desinf_vinc_silos_values,
             snapshot_label,
-            ),
+        ),
     ]
 
     # Resultado final
@@ -1175,7 +1331,6 @@ def main() -> None:
 
     if errors:
         raise RuntimeError(" | ".join(errors))
-
 
 if __name__ == "__main__":
     main()
