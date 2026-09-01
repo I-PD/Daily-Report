@@ -4,40 +4,69 @@ from zoneinfo import ZoneInfo
 
 TZ = ZoneInfo("Europe/Lisbon")
 
-def parse_holidays():
+def parse_holidays() -> set[date]:
     raw = os.getenv("HOLIDAYS", "")
-    holidays = set()
+    holidays: set[date] = set()
 
     for item in raw.split(","):
         item = item.strip()
-        if item:
+
+        if not item:
+            continue
+
+        try:
             holidays.add(date.fromisoformat(item))
+        except ValueError as exc:
+            raise ValueError(
+                f"HOLIDAYS contém uma data inválida: {item!r}. "
+                "Usar formato YYYY-MM-DD."
+            ) from exc
 
     return holidays
 
+
+def is_holiday(day: date) -> bool:
+    return day in parse_holidays()
+
+
+def is_weekend(day: date) -> bool:
+    return day.weekday() >= 5
+
+
 def is_operational_date(day: date) -> bool:
     """
+    Mantido para classificação/calendário.
+
     Um dia operacional normal é:
     - segunda a sexta;
     - não incluído em HOLIDAYS.
-
-    Um sábado, domingo ou feriado ainda poderá originar
-    relatório se existir produção.
     """
-    if day.weekday() >= 5:
-        return False
+    return not is_weekend(day) and not is_holiday(day)
 
-    if day in parse_holidays():
-        return False
+# def parse_holidays():
+#     raw = os.getenv("HOLIDAYS", "")
+#     holidays = set()
 
-    return True
+#     for item in raw.split(","):
+#         item = item.strip()
+#         if item:
+#             holidays.add(date.fromisoformat(item))
 
-# def is_operational_day(now):
-#     # sábado = 5, domingo = 6
-#     if now.weekday() >= 5:
+#     return holidays
+
+# def is_operational_date(day: date) -> bool:
+#     """
+#     Um dia operacional normal é:
+#     - segunda a sexta;
+#     - não incluído em HOLIDAYS.
+
+#     Um sábado, domingo ou feriado ainda poderá originar
+#     relatório se existir produção.
+#     """
+#     if day.weekday() >= 5:
 #         return False
 
-#     if now.date() in parse_holidays():
+#     if day in parse_holidays():
 #         return False
 
 #     return True

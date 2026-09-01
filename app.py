@@ -17,7 +17,7 @@ from datetime import date, datetime, timedelta, time as dt_time
 from email.message import EmailMessage
 from email.utils import formatdate
 from pathlib import Path
-from calendar_helpers import TZ, is_operational_day, previous_operational_day, is_operational_date
+from calendar_helpers import TZ, is_weekend, is_holiday, is_operational_day, previous_operational_day, is_operational_date
 
 from dotenv import load_dotenv
 from jinja2 import Environment, FileSystemLoader
@@ -26,7 +26,7 @@ from psycopg2.extras import RealDictCursor
 from playwright.sync_api import sync_playwright
 
 from queries import (
-    QUERY_HAS_REPORT_ACTIVITY,
+    # QUERY_HAS_REPORT_ACTIVITY,
     QUERY_TEMPO_PRODUCAO_MD,
     QUERY_HORAS_MOINHOS,
     QUERY_KGS_SILOS,
@@ -360,6 +360,15 @@ def run_multi_row_query(conn, query_name: str,query: str, params: dict | None = 
 
     return [dict(row) for row in rows]
 
+def to_float(value: object) -> float:
+    if value is None:
+        return 0.0
+
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
 def has_production_for_date(conn, report_day: date) -> bool:
     """
     Deteta se existiu produção num sábado ou feriado.
@@ -380,19 +389,94 @@ def has_production_for_date(conn, report_day: date) -> bool:
         os.environ.get("EXCEPTIONAL_DAY_MIN_KG", "10")
     )
 
-    row = run_single_vinc_row_query(
+     # ---------------------------------------------------------
+    # Trituração
+    # ---------------------------------------------------------
+    trit_row = run_single_row_query(
         conn=conn,
-        query_name="has_report_activity",
-        query=QUERY_HAS_REPORT_ACTIVITY,
-        params={
-            "report_date": report_day,
-            "min_activity_kg": min_kg,
-        },
+        query_name="check_production_trituracao",
+        query=QUERY_KGS_SILOS,
+        params=params,
     )
 
-    has_production = bool(row.get("has_production", False))
+    trit_kg = to_float(
+        trit_row.get("TOTAL", 0)
+    )
 
-    print(f"[INFO] Atividade em "f"{report_day:%d/%m/%Y}: "f"{has_production}",flush=True,)
+    # ---------------------------------------------------------
+    # Desinfeção Trituração
+    # ---------------------------------------------------------
+    desinf_row = run_single_row_query(
+        conn=conn,
+        query_name="check_production_desinf_trit",
+        query=QUERY_DESINF_TRIT_KGS_SILOS_DIA_ANTERIOR,
+        params=params,
+    )
+
+    desinf_kg = to_float(
+        desinf_row.get("TOTAL", 0)
+    )
+
+    # ---------------------------------------------------------
+    # Calibração
+    # ---------------------------------------------------------
+    calib_rows = run_multi_row_query(
+        conn=conn,
+        query_name="check_production_calibracao",
+        query=QUERY_CALIB_GRANULADO_DIA_ANTERIOR,
+        params=params,
+    )
+
+    calib_total_row = next(
+        (
+            row
+            for row in calib_rows
+            if str(row.get("produto", "")).lower() == "total"
+        ),
+        None,
+    )
+
+    calib_kg = (
+        to_float(calib_total_row.get("Total (Kg)", 0))
+        if calib_total_row
+        else 0.0
+    )
+
+    # ---------------------------------------------------------
+    # Total
+    # ---------------------------------------------------------
+    total_kg = (
+        trit_kg
+        + desinf_kg
+        + calib_kg
+    )
+
+    has_production = total_kg >= min_kg
+
+    # row = run_single_vinc_row_query(
+    #     conn=conn,
+    #     query_name="has_report_activity",
+    #     query=QUERY_HAS_REPORT_ACTIVITY,
+    #     params={
+    #         "report_date": report_day,
+    #         "min_activity_kg": min_kg,
+    #     },
+    # )
+
+    # has_production = bool(row.get("has_production", False))
+
+    # print(f"[INFO] Atividade em "f"{report_day:%d/%m/%Y}: "f"{has_production}",flush=True,)
+
+    print(
+        f"[INFO] Produção {report_day:%d/%m/%Y}: "
+        f"Trituração={trit_kg:.0f} kg | "
+        f"Desinf. Trituração={desinf_kg:.0f} kg | "
+        f"Calibração={calib_kg:.0f} kg | "
+        f"TOTAL={total_kg:.0f} kg | "
+        f"mínimo={min_kg:.0f} kg | "
+        f"enviar={has_production}",
+        flush=True,
+    )
 
     return has_production
 
@@ -411,17 +495,52 @@ def get_report_days_to_send(conn, now: datetime) -> list[date]:
 
     report_day = get_previous_calendar_day(now)
 
-    if is_operational_date(report_day):
-        print(f"[INFO] {report_day:%d/%m/%Y} ""é um dia operacional normal.",flush=True,)
+    # if is_operational_date(report_day):
+    #     print(f"[INFO] {report_day:%d/%m/%Y} ""é um dia operacional normal.",flush=True,)
 
-        return [report_day]
+    #     return [report_day]
 
-    print(f"[INFO] {report_day:%d/%m/%Y} ""é fim de semana ou HOLIDAY. ""A verificar produção.",flush=True,)
+    # print(f"[INFO] {report_day:%d/%m/%Y} ""é fim de semana ou HOLIDAY. ""A verificar produção.",flush=True,)
 
-    if has_production_for_date(conn, report_day,):
-        return [report_day]
+    # if has_production_for_date(conn, report_day,):
+    #     return [report_day]
 
-    return []
+    # return []
+
+    if is_holiday(report_day):
+        day_type = "HOLIDAY"
+    elif is_weekend(report_day):
+        day_type = "fim de semana"
+    else:
+        day_type = "dia útil"
+
+    print(
+        f"[INFO] A avaliar {report_day:%d/%m/%Y} "
+        f"({day_type}).",
+        flush=True,
+    )
+
+    if not has_production_for_date(
+        conn,
+        report_day,
+    ):
+        print(
+            f"[INFO] {report_day:%d/%m/%Y}: "
+            "produção insuficiente. "
+            "Relatório não será enviado.",
+            flush=True,
+        )
+
+        return []
+
+    print(
+        f"[INFO] {report_day:%d/%m/%Y}: "
+        "produção encontrada. "
+        "Relatório será gerado.",
+        flush=True,
+    )
+
+    return [report_day]
 
 # Construção dos blocos do relatório
 def build_standard_block(
