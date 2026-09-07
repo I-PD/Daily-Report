@@ -483,29 +483,65 @@ def has_production_for_date(conn, report_day: date) -> bool:
 
 def get_report_days_to_send(conn, now: datetime) -> list[date]:
     """
-    Nesta execução só pode ser enviado um relatório:
-    o do dia civil anterior.
+    Determina quais os relatórios a enviar.
 
     Regras:
-    - dia útil normal: envia;
-    - sábado/domingo/HOLIDAYS: envia apenas se houve atividade.
+    - segunda-feira:
+        - envia sempre o último dia operacional anterior;
+        - verifica sábado;
+        - se sábado teve produção, envia também sábado.
+    - restantes dias:
+        - dia útil anterior: envia sempre;
+        - sábado/domingo/HOLIDAY: envia apenas se houve produção.
     """
-    # standard_day = previous_operational_day(now)
-    # report_days = [standard_day]
+    
+    today = now.date()
+    
+    # ---------------------------------------------------------
+    # SEGUNDA-FEIRA
+    # ---------------------------------------------------------
+    if today.weekday() == 0:
+        standard_day = previous_operational_day(now)
+        saturday = today - timedelta(days=2)
 
+        report_days = [standard_day]
+
+        print(
+            f"[INFO] Segunda-feira: relatório base 6ª feira"
+            f"{standard_day:%d/%m/%Y}.",
+            flush=True,
+        )
+
+        print(
+            f"[INFO] A verificar atividade de sábado "
+            f"{saturday:%d/%m/%Y}.",
+            flush=True,
+        )
+
+        if has_production_for_date(conn, saturday):
+            print(
+                f"[INFO] {saturday:%d/%m/%Y}: "
+                "produção encontrada. "
+                "Será enviado também o relatório de sábado.",
+                flush=True,
+            )
+
+            report_days.append(saturday)
+
+        else:
+            print(
+                f"[INFO] {saturday:%d/%m/%Y}: "
+                "sem produção. "
+                "Será enviado apenas o relatório do último dia operacional.",
+                flush=True,
+            )
+
+        return report_days
+
+    # ---------------------------------------------------------
+    # RESTANTES DIAS
+    # ---------------------------------------------------------
     report_day = get_previous_calendar_day(now)
-
-    # if is_operational_date(report_day):
-    #     print(f"[INFO] {report_day:%d/%m/%Y} ""é um dia operacional normal.",flush=True,)
-
-    #     return [report_day]
-
-    # print(f"[INFO] {report_day:%d/%m/%Y} ""é fim de semana ou HOLIDAY. ""A verificar produção.",flush=True,)
-
-    # if has_production_for_date(conn, report_day,):
-    #     return [report_day]
-
-    # return []
 
     if is_holiday(report_day):
         day_type = "HOLIDAY"
@@ -520,27 +556,34 @@ def get_report_days_to_send(conn, now: datetime) -> list[date]:
         flush=True,
     )
 
-    if not has_production_for_date(
-        conn,
-        report_day,
-    ):
+    # Dia útil normal -> envia SEM verificar produção
+    if is_operational_date(report_day):
         print(
             f"[INFO] {report_day:%d/%m/%Y}: "
-            "produção insuficiente. "
-            "Relatório não será enviado.",
+            "dia operacional normal. Relatório será gerado.",
             flush=True,
         )
 
-        return []
+        return [report_day]
+
+    # Fim de semana / HOLIDAY -> só envia com produção
+    if has_production_for_date(conn, report_day):
+        print(
+            f"[INFO] {report_day:%d/%m/%Y}: "
+            "produção encontrada. Relatório será gerado.",
+            flush=True,
+        )
+
+        return [report_day]
 
     print(
         f"[INFO] {report_day:%d/%m/%Y}: "
-        "produção encontrada. "
-        "Relatório será gerado.",
+        "fim de semana/HOLIDAY sem produção. "
+        "Relatório não será enviado.",
         flush=True,
     )
 
-    return [report_day]
+    return []
 
 # Construção dos blocos do relatório
 def build_standard_block(
