@@ -1848,12 +1848,12 @@ SELECT
   ), 0) AS "Atual 00-08"
 FROM deltas;
 """
-QUERY_CALIB_GRANULADO_ATUAL_00_08 = """
+QUERY_CALIB_GRANULADO_ATUAL_22_06 = """
 WITH
 bounds AS (
   SELECT
-    (%(report_date)s::date + interval '1 day') AT TIME ZONE 'Europe/Lisbon' AS start_ts,
-    (%(report_date)s::date + interval '1 day' + interval '8 hours') AT TIME ZONE 'Europe/Lisbon' AS end_ts
+    (%(report_date)s::date + interval '22 hours') AT TIME ZONE 'Europe/Lisbon' AS start_ts,
+    (%(report_date)s::date + interval '1 day' + interval '6 hours') AT TIME ZONE 'Europe/Lisbon' AS end_ts
 ),
 products AS (
   SELECT * FROM (VALUES
@@ -1909,7 +1909,7 @@ all_rows AS (
 )
 SELECT
   produto,
-  ROUND(kg_atual, 0) AS "Atual 00-08"
+  ROUND(kg_atual, 0) AS "Atual 22-06"
 FROM all_rows
 ORDER BY CASE produto
   WHEN '05A1' THEN 1
@@ -1920,15 +1920,15 @@ ORDER BY CASE produto
   ELSE 99
 END;
 """
-QUERY_CALIB_OEE_ATUAL_00_08 = """
+QUERY_CALIB_OEE_ATUAL_22_06 = """
 WITH
 params_oee AS (
   SELECT 1250::numeric AS cadencia_kg_h
 ),
 bounds AS (
   SELECT
-    (%(report_date)s::date + interval '1 day') AT TIME ZONE 'Europe/Lisbon' AS start_ts,
-    (%(report_date)s::date + interval '1 day' + interval '8 hours') AT TIME ZONE 'Europe/Lisbon' AS end_ts,
+    (%(report_date)s::date + interval '22 hours') AT TIME ZONE 'Europe/Lisbon' AS start_ts,
+    (%(report_date)s::date + interval '1 day' + interval '6 hours') AT TIME ZONE 'Europe/Lisbon' AS end_ts,
     28800.0 AS planned_s
 ),
 produced AS (
@@ -2079,35 +2079,35 @@ kpis AS (
 )
 SELECT
   'Performance' AS "Indicador",
-  ROUND(LEAST(100.0, performance_pct), 1) AS "Atual 00-08"
+  ROUND(LEAST(100.0, performance_pct), 1) AS "Atual 22-06"
 FROM kpis
 
 UNION ALL
 
 SELECT
   'Disponibilidade' AS "Indicador",
-  ROUND(LEAST(100.0, disponibilidade_pct), 1) AS "Atual 00-08"
+  ROUND(LEAST(100.0, disponibilidade_pct), 1) AS "Atual 22-06"
 FROM kpis
 
 UNION ALL
 
 SELECT
   'OEE' AS "Indicador",
-  ROUND(LEAST(100.0, (performance_pct * disponibilidade_pct) / 100.0), 1) AS "Atual 00-08"
+  ROUND(LEAST(100.0, (performance_pct * disponibilidade_pct) / 100.0), 1) AS "Atual 22-06"
 FROM kpis
 
 UNION ALL
 
 SELECT
   'Tempo Trabalho sem granulado' AS "Indicador",
-  ROUND(tempo_sem_granulado_s, 0) AS "Atual 00-08"
+  ROUND(tempo_sem_granulado_s, 0) AS "Atual 22-06"
 FROM kpis
 
 UNION ALL
 
 SELECT
   'Tempo Secção Desligada' AS "Indicador",
-  ROUND(tempo_seccao_desligada_s, 0) AS "Atual 00-08"
+  ROUND(tempo_seccao_desligada_s, 0) AS "Atual 22-06"
 FROM kpis;
 """
 QUERY_DESINF_TRIT_DESINFECOES_ATUAL_00_08 = """

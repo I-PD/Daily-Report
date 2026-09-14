@@ -43,8 +43,8 @@ from queries import (
     QUERY_HORAS_MOINHOS_ATUAL_00_08,
     QUERY_KGS_SILOS_ATUAL_00_08,
     QUERY_DESINF_TRIT_KGS_SILOS_ATUAL_00_08,
-    QUERY_CALIB_GRANULADO_ATUAL_00_08,
-    QUERY_CALIB_OEE_ATUAL_00_08,
+    QUERY_CALIB_GRANULADO_ATUAL_22_06,
+    QUERY_CALIB_OEE_ATUAL_22_06,
     QUERY_DESINF_TRIT_DESINFECOES_ATUAL_00_08,
     QUERY_DESINF_VINC_DESINFECOES_ATUAL_00_08,
 )
@@ -675,7 +675,7 @@ def build_calibracao_granulado_block(
         current_label: str,
 ) -> ReportTableBlock:
     current_by_product = {
-        str(row.get("produto", "")): row.get("Atual 00-08", 0)
+        str(row.get("produto", "")): row.get("Atual 22-06", 0)
         for row in current_rows
     }
     formatted_rows: list[dict[str, object]] = []
@@ -732,7 +732,7 @@ def build_calibracao_oee_block(
     ]
 
     current_by_indicator = {
-        str(row.get("Indicador", "")): row.get("Atual 00-08", 0)
+        str(row.get("Indicador", "")): row.get("Atual 22-06", 0)
         for row in current_rows
     }
 
@@ -1017,6 +1017,8 @@ def get_daily_sections(conn, report_date: datetime) -> list[ReportSection]:
         report_date + timedelta(days=1)
     ).strftime("%d/%m/%Y")
     current_label = f"Atual 00-08 ({current_date:%d/%m})"
+    calib_current_label = f"Atual 22-06 ({current_date:%d/%m})"
+
 
     query_params = {
         "report_date": report_date.date()
@@ -1168,8 +1170,8 @@ def get_daily_sections(conn, report_date: datetime) -> list[ReportSection]:
 
     calibracao_current_rows = run_multi_row_query(
         conn, 
-        "calibracao_granulado_atual_00_08",
-        QUERY_CALIB_GRANULADO_ATUAL_00_08,
+        "calibracao_granulado_atual_22_06",
+        QUERY_CALIB_GRANULADO_ATUAL_22_06,
         query_params,
     )
 
@@ -1181,8 +1183,8 @@ def get_daily_sections(conn, report_date: datetime) -> list[ReportSection]:
     )
 
     calibracao_oee_current_rows = run_multi_row_query(
-        conn, "calibracao_oee_atual_00_08",
-        QUERY_CALIB_OEE_ATUAL_00_08,
+        conn, "calibracao_oee_atual_22_06",
+        QUERY_CALIB_OEE_ATUAL_22_06,
         query_params,
     )
 
@@ -1190,12 +1192,12 @@ def get_daily_sections(conn, report_date: datetime) -> list[ReportSection]:
         build_calibracao_granulado_block(
             calibracao_rows,
             calibracao_current_rows,
-            current_label,
+            calib_current_label,
         ),
         build_calibracao_oee_block(
             calibracao_oee_rows,
             calibracao_oee_current_rows,
-            current_label,
+            calib_current_label,
         ),
     ]
 
