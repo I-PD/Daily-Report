@@ -1007,21 +1007,55 @@ def build_oee_block(values: dict[str, object]) -> MetricBlock:
 # 1) Executar as queries reais
 # 2) Separar os blocos por secção
 # 3) Devolver uma estrutura organizada para o PDF e para o e-mail
-def get_daily_sections(conn, report_date: datetime) -> list[ReportSection]:
+def get_daily_sections(conn, report_date: datetime, current_date: date) -> list[ReportSection]:
     report_date_label = report_date.strftime("%d/%m/%Y")
-    current_date = report_date + timedelta(days=1)
+    #current_date = report_date + timedelta(days=1)
     # O estado dos silos é medido às 08h do dia seguinte.
     # Exemplo:
     # relatório sexta -> sábado às 08h
-    snapshot_label = (
-        report_date + timedelta(days=1)
-    ).strftime("%d/%m/%Y")
+    # snapshot_label = (
+    #     report_date + timedelta(days=1)
+    # ).strftime("%d/%m/%Y")
+
+    # O dia atual é independente do dia histórico.
+    snapshot_label = current_date.strftime("%d/%m/%Y")
+
     current_label = f"Atual 00-08 ({current_date:%d/%m})"
     calib_current_label = f"Atual 22-06 ({current_date:%d/%m})"
 
-
-    query_params = {
+    # current_params = {
+    #     "report_date": report_date.date()
+    # }
+    # Parâmetros das queries do dia anterior
+    historical_params = {
         "report_date": report_date.date()
+    }
+
+    # Limites temporais do dia atual
+    current_params = {
+        "report_date": current_date - timedelta(days=1),
+        "current_date": current_date,
+
+        "current_start": datetime.combine(
+            current_date, dt_time(0, 0), tzinfo=TZ
+        ),
+
+        "current_end": datetime.combine(
+            current_date, dt_time(8, 0), tzinfo=TZ
+        ),
+
+        "calib_start": datetime.combine(
+            current_date - timedelta(days=1),
+            dt_time(22, 0), tzinfo=TZ
+        ),
+
+        "calib_end": datetime.combine(
+            current_date, dt_time(6, 0), tzinfo=TZ
+        ),
+
+        "snapshot_at": datetime.combine(
+            current_date, dt_time(8, 0), tzinfo=TZ
+        ),
     }
 
     # Secção: Trituração
@@ -1029,49 +1063,49 @@ def get_daily_sections(conn, report_date: datetime) -> list[ReportSection]:
         conn,
         "trit_total_silos_8h",
         QUERY_TRIT_TOTAL_SILOS_8H,
-        query_params,
+        current_params,
     )
     tempo_values = run_single_row_query(
         conn,
         "tempo_producao_md",
         QUERY_TEMPO_PRODUCAO_MD, 
-        query_params,
+        historical_params,
     )
     tempo_current = run_single_vinc_row_query(
         conn, 
         "tempo_producao_md_atual_00_08", 
         QUERY_TEMPO_PRODUCAO_MD_ATUAL_00_08, 
-        query_params,
+        current_params,
     ).get("Atual 00-08", "00h00 (0%)")
     horas_values = run_single_row_query(
         conn,
         "horas_moinhos",
         QUERY_HORAS_MOINHOS, 
-        query_params,
+        historical_params,
     )
     horas_current = run_single_vinc_row_query(
         conn, 
         "horas_moinhos_atual_00_08", 
         QUERY_HORAS_MOINHOS_ATUAL_00_08, 
-        query_params,
+        current_params,
     ).get("Atual 00-08", "00h00")
     kgs_values = run_single_row_query(
         conn,
         "kgs_silos_1a5",
         QUERY_KGS_SILOS, 
-        query_params,
+        historical_params,
     )
     kgs_current = run_single_vinc_row_query(
         conn, 
         "kgs_silos_1a5_atual_00_08", 
         QUERY_KGS_SILOS_ATUAL_00_08, 
-        query_params,
+        current_params,
     ).get("Atual 00-08", 0)
     oee_values = run_single_row_query(
         conn,
         "oee_trituracao",
         QUERY_OEE, 
-        query_params,
+        historical_params,
     )
 
     trituracao_blocks = [
@@ -1109,35 +1143,35 @@ def get_daily_sections(conn, report_date: datetime) -> list[ReportSection]:
         conn,
         "desinf_kgs_silos_6a10",
         QUERY_DESINF_TRIT_KGS_SILOS_DIA_ANTERIOR,
-        query_params,
+        historical_params,
     )
 
     desinf_kgs_current = run_single_vinc_row_query(
         conn, 
         "desinf_kgs_silos_6a10_atual_00_08",
         QUERY_DESINF_TRIT_KGS_SILOS_ATUAL_00_08,
-        query_params,
+        current_params,
     ).get("Atual 00-08", 0)
 
     desinf_total_silos_8h = run_scalar_query(
         conn,
         "desinf_total_silos_8h",
         QUERY_DESINF_TRIT_TOTAL_SILOS_8H,
-        query_params,
+        current_params,
     )
 
     desinf_trit_rows = run_multi_row_query(
         conn,
         "desinf_trit_desinfecoes",
         QUERY_DESINF_TRIT_DIA_ANTERIOR,
-        query_params,
+        historical_params,
     )
 
     desinf_trit_current_rows = run_multi_row_query(
         conn, 
         "desinf_trit_desinfecoes_atual_00_08",
         QUERY_DESINF_TRIT_DESINFECOES_ATUAL_00_08,
-        query_params,
+        current_params,
     )
 
     desinf_blocks = [
@@ -1165,27 +1199,27 @@ def get_daily_sections(conn, report_date: datetime) -> list[ReportSection]:
         conn,
         "calibracao_granulado",
         QUERY_CALIB_GRANULADO_DIA_ANTERIOR,
-        query_params,
+        historical_params,
     )
 
     calibracao_current_rows = run_multi_row_query(
         conn, 
         "calibracao_granulado_atual_22_06",
         QUERY_CALIB_GRANULADO_ATUAL_22_06,
-        query_params,
+        current_params,
     )
 
     calibracao_oee_rows = run_multi_row_query(
         conn,
         "calibracao_oee",
         QUERY_CALIB_OEE_TABELA_DIA_ANTERIOR,
-        query_params,
+        historical_params,
     )
 
     calibracao_oee_current_rows = run_multi_row_query(
         conn, "calibracao_oee_atual_22_06",
         QUERY_CALIB_OEE_ATUAL_22_06,
-        query_params,
+        current_params,
     )
 
     calibracao_blocks = [
@@ -1206,21 +1240,21 @@ def get_daily_sections(conn, report_date: datetime) -> list[ReportSection]:
         conn,
         "desinf_vinc_silos_8h",
         QUERY_DESINF_VINC_8H,
-        query_params,
+        current_params,
     )
     
     desinf_vinc_rows = run_multi_row_query(
         conn,
         "desinf_vinc_desinfecoes",
         QUERY_DESINF_VINC_DESINFECOES_DIA_ANTERIOR,
-        query_params,
+        historical_params,
     )
 
     desinf_vinc_current_rows = run_multi_row_query(
         conn, 
         "desinf_vinc_desinfecoes_atual_00_08",
         QUERY_DESINF_VINC_DESINFECOES_ATUAL_00_08,
-        query_params,
+        current_params,
     )
 
     desinf_vinc_blocks = [
@@ -1450,7 +1484,12 @@ def main() -> None:
             try:
                 print(f"[INFO] A gerar relatório de "f"{report_day:%d/%m/%Y}.",flush=True,)
 
-                sections = get_daily_sections(conn,report_date,)
+                # sections = get_daily_sections(conn,report_date,)
+                sections = get_daily_sections(
+                    conn=conn,
+                    report_date=report_date,
+                    current_date=now.date(),
+                )
 
                 pdf_html = render_html(report_date,sections,)
 
