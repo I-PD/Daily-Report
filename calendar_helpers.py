@@ -43,34 +43,6 @@ def is_operational_date(day: date) -> bool:
     """
     return not is_weekend(day) and not is_holiday(day)
 
-# def parse_holidays():
-#     raw = os.getenv("HOLIDAYS", "")
-#     holidays = set()
-
-#     for item in raw.split(","):
-#         item = item.strip()
-#         if item:
-#             holidays.add(date.fromisoformat(item))
-
-#     return holidays
-
-# def is_operational_date(day: date) -> bool:
-#     """
-#     Um dia operacional normal é:
-#     - segunda a sexta;
-#     - não incluído em HOLIDAYS.
-
-#     Um sábado, domingo ou feriado ainda poderá originar
-#     relatório se existir produção.
-#     """
-#     if day.weekday() >= 5:
-#         return False
-
-#     if day in parse_holidays():
-#         return False
-
-#     return True
-
 def is_operational_day(now: datetime) -> bool:
     return is_operational_date(now.date())
 

@@ -1496,40 +1496,128 @@ last_values AS (
         silo_id,
         qtd_silo
     FROM mov_granulados.silos, ref
-    WHERE silo_id BETWEEN 1 AND 6
+    WHERE silo_id BETWEEN 1 AND 10
       AND created_at <= ref.ref_ts + interval '5 minutes'
     ORDER BY silo_id, created_at DESC
 )
 SELECT
     COALESCE(
-        MAX(qtd_silo) FILTER (WHERE silo_id = 1), 
+        MAX(GREATEST(qtd_silo,0)) FILTER (WHERE silo_id = 1), 
         0
     ) AS "SILO 1: 3A7 CS",
 
     COALESCE(
-        MAX(qtd_silo) FILTER (WHERE silo_id = 2), 
+        MAX(GREATEST(qtd_silo,0)) FILTER (WHERE silo_id = 2), 
         0
     ) AS "SILO 2: 2A3 CS",
 
     COALESCE(
-        MAX(qtd_silo) FILTER (WHERE silo_id = 3), 
+        MAX(GREATEST(qtd_silo,0)) FILTER (WHERE silo_id = 3), 
         0
     ) AS "SILO 3: 1A2 CS",
 
     COALESCE(
-        MAX(qtd_silo) FILTER (WHERE silo_id = 4), 
+        MAX(GREATEST(qtd_silo,0)) FILTER (WHERE silo_id = 4), 
         0
     ) AS "SILO 4: 05A1 CS",
 
     COALESCE(
-        MAX(qtd_silo) FILTER (WHERE silo_id = 5), 
+        MAX(GREATEST(qtd_silo,0)) FILTER (WHERE silo_id = 5), 
         0
     ) AS "SILO 5: 1A2 VINC",
 
     COALESCE(
-        MAX(qtd_silo) FILTER (WHERE silo_id = 6), 
+        MAX(GREATEST(qtd_silo,0)) FILTER (WHERE silo_id = 6), 
         0
-    ) AS "SILO 6: 05A1 VINC"
+    ) AS "SILO 6: 05A1 VINC",
+
+    COALESCE(
+        MAX(GREATEST(qtd_silo,0)) FILTER (WHERE silo_id = 7), 
+        0
+    ) AS "SILO 7: 05A1 XF",
+
+    COALESCE(
+        MAX(GREATEST(qtd_silo,0)) FILTER (WHERE silo_id = 8), 
+        0
+    ) AS "SILO 8: 1A2 XF",
+
+    COALESCE(
+        MAX(GREATEST(qtd_silo,0)) FILTER (WHERE silo_id = 9), 
+        0
+    ) AS "SILO 9: 2A3 XF",
+
+    COALESCE(
+        MAX(GREATEST(qtd_silo,0)) FILTER (WHERE silo_id = 10), 
+        0
+    ) AS "SILO 10: 3A7 XF"
+    
+FROM last_values;
+"""
+# Domingo 12h: query independente, sem alterar a query diária das 08h.
+QUERY_DESINF_VINC_12H = """
+WITH ref AS (
+  SELECT
+  %(snapshot_at)s::timestamptz AS ref_ts
+),
+last_values AS (
+    SELECT DISTINCT ON (silo_id)
+        silo_id,
+        qtd_silo
+    FROM mov_granulados.silos, ref
+    WHERE silo_id BETWEEN 1 AND 10
+      AND created_at <= ref.ref_ts
+    ORDER BY silo_id, created_at DESC
+)
+SELECT
+    COALESCE(
+        MAX(GREATEST(qtd_silo,0)) FILTER (WHERE silo_id = 1), 
+        0
+    ) AS "SILO 1: 3A7 CS",
+
+    COALESCE(
+        MAX(GREATEST(qtd_silo,0)) FILTER (WHERE silo_id = 2), 
+        0
+    ) AS "SILO 2: 2A3 CS",
+
+    COALESCE(
+        MAX(GREATEST(qtd_silo,0)) FILTER (WHERE silo_id = 3), 
+        0
+    ) AS "SILO 3: 1A2 CS",
+
+    COALESCE(
+        MAX(GREATEST(qtd_silo,0)) FILTER (WHERE silo_id = 4), 
+        0
+    ) AS "SILO 4: 05A1 CS",
+
+    COALESCE(
+        MAX(GREATEST(qtd_silo,0)) FILTER (WHERE silo_id = 5), 
+        0
+    ) AS "SILO 5: 1A2 VINC",
+
+    COALESCE(
+        MAX(GREATEST(qtd_silo,0)) FILTER (WHERE silo_id = 6), 
+        0
+    ) AS "SILO 6: 05A1 VINC",
+
+    COALESCE(
+        MAX(GREATEST(qtd_silo,0)) FILTER (WHERE silo_id = 7), 
+        0
+    ) AS "SILO 7: 05A1 XF",
+
+    COALESCE(
+        MAX(GREATEST(qtd_silo,0)) FILTER (WHERE silo_id = 8), 
+        0
+    ) AS "SILO 8: 1A2 XF",
+
+    COALESCE(
+        MAX(GREATEST(qtd_silo,0)) FILTER (WHERE silo_id = 9), 
+        0
+    ) AS "SILO 9: 2A3 XF",
+
+    COALESCE(
+        MAX(GREATEST(qtd_silo,0)) FILTER (WHERE silo_id = 10), 
+        0
+    ) AS "SILO 10: 3A7 XF"
     
 FROM last_values;
 """

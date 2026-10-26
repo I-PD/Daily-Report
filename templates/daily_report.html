@@ -19,7 +19,6 @@ Relatório Diário
     Bloco 2
 ============================================================
 -->
-
 <!DOCTYPE html>
 <html lang="pt">
 <head>
@@ -29,10 +28,6 @@ Relatório Diário
 </head>
 <body>
   <div class="page">
-    <!-- Cabeçalho principal do relatório 
-    <div class="report-header">
-      <h1>Relatório Diário</h1>
-    </div>-->
     <header class="report-header">
       <h1>Relatório Diário</h1>
     </header>
@@ -78,39 +73,12 @@ Relatório Diário
                         </tr>
                       {% endfor %}
                     </tbody>
-          
-                    <!-- <tbody>
-                      {% for row in block.rows %}
-                        <tr class="{% if row['Produto'] == 'Total' %}total-row{% endif %}">
-                          {% for header in block.headers %}
-                          <td class="{% if row['_styles'] is defined 
-                          and header in row['_styles'] %}cell-{{ row['_styles'][header] }}{% endif %}">
-                            {{ row[header] }}
-                          </td>
-                          {% endfor %}
-                        </tr>
-                      {% endfor %}
-                    </tbody> -->
                   </table>
                 </section>
           
               {% else %}
           
-                <!-- Bloco do tipo cards 
-                <section class="metric-block">-->
-                  <!-- <section class="metric-block {% if block.cards|length == 1 %}full-width-block{% endif %}">
-                  <div class="block-title">{{ block.title }}</div>
-          
-                  <div class="cards-grid {% if block.cards|length == 1 %}single-card{% endif %}">
-                    {% for card in block.cards %}
-                      <div class="metric-card"
-                          style="background-color: {{ card.bg_color }}; color: {{ card.text_color }};">
-                        <div class="metric-label metric-label-subtitle">{{ card.label }}</div>
-                        <div class="metric-value">{{ card.value }}</div>
-                      </div>
-                    {% endfor %}
-                  </div>
-                </section> -->
+                <!-- Bloco do tipo cards <section class="metric-block">-->
                 <section class="metric-block block-{{ block.key }} 
                 {% if block.cards|length == 1 
                     and block.key == 'trit_total_silos_8h'%}

@@ -208,127 +208,6 @@
     width: 100%;
   }
 
-  /* .metric-card {
-      min-height: 16mm;
-      padding: 1.2mm 0.7mm;
-  }
-  
-  .metric-label {
-      margin-bottom: 0.8mm;
-      font-size: 6.5px;
-  }
-
-  .metric-value {
-      font-size: 10px;
-  } */
-
-  /* ============================================================
-   Separação visual das secções do relatório
-   ============================================================ */
-
-  /* .report-section + .report-section {
-      margin: 0;
-      padding: 0;
-      border-top: 0;
-  }  
-
-  .report-table th {
-      padding: 1mm 0.5mm;
-      font-size: 6.8px;
-  }
-
-  .report-table td {
-      padding: 1.2mm 0.5mm;
-      font-size: 8.2px;
-  }
-
-  .table-block {
-      grid-column: 1 / -1;
-      margin: 0;
-  }
-  
-  .report-date {
-    font-size: 20px;
-    color: #c8d2e0;
-  }
-  
-  .blocks-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 18px;
-  }
-
-  .report-section {
-    margin-top: 18px; 
-    page-break-inside: avoid;
-  }
-
-  .section-title {
-    font-size: 22px;
-    margin: 18px 0 14px 0;
-    color: #111111;
-  }
-
-  .report-section + .report-section {
-    margin-top: 28px;
-    padding-top: 10px; 
-    border-top: 2px solid #d0d0d0;
-  }
-
-   Faz blocos com apenas 1 cartão ocuparem a largura inteira 
-  .cards-grid.single-card {
-    grid-template-columns: 1fr;
-  }
-
-  .full-width-block {
-    grid-column: 1 / -1;
-    width: 60%;
-    justify-self: center;
-  }
-
-  .table-block {
-    grid-column: 1 / -1;
-    border: 1px solid #222;
-    margin-bottom: 18px;
-    background: #ffffff;
-  }
-  
-  .report-table {
-    width: 100%;
-    border-collapse: collapse;
-    table-layout: fixed;
-  }
-  
-  .report-table th {
-    background: #eeeeee;
-    border: 1px solid #999999;
-    padding: 8px;
-    text-align: center;
-    font-weight: 700;
-    font-size: 13px;
-  }
-  
-  .report-table td {
-    background: #d9d9e3;
-    border: 1px solid #999999;
-    text-align: center;
-    font-weight: 700;
-    font-size: 16px;
-    padding: 10px; 
-  }
-  
-  .report-table td:first-child {
-    text-align: left;
-    text-align: center;
-    padding-left: 14px;
-  }
-  
-  .report-table .total-row td {
-    background: #6b6b6b;
-    color: #ffffff;
-    font-weight: 800;
-  } */
-
   /* Cores condicionais em células de tabela */
   .report-table td.cell-ok {
     background: #73bf69;
@@ -354,4 +233,12 @@
   .report-table th.header-blue {
     background: #5794f2;
     color: #ffffff;
+  }
+
+    /* Cabeçalhos dos silos 7-10 na última tabela da secção VINC */
+  .sections-grid > .report-section:last-child
+  .blocks-grid > .table-block:last-child
+  .report-table th.header-blue {
+      background: #f2495c;
+      color: #ffffff;
   }

@@ -9,6 +9,7 @@
 ##################
 from __future__ import annotations
 
+import argparse
 import os
 import smtplib
 import time
@@ -47,6 +48,7 @@ from queries import (
     QUERY_CALIB_OEE_ATUAL_22_06,
     QUERY_DESINF_TRIT_DESINFECOES_ATUAL_00_08,
     QUERY_DESINF_VINC_DESINFECOES_ATUAL_00_08,
+    QUERY_DESINF_VINC_12H
 )
 
 # Configuração base do projeto
@@ -329,14 +331,6 @@ def run_single_row_query(conn, query_name: str, query: str, params: dict | None 
     """
     row = execute_query(conn=conn,query_name=query_name,query=query,params=params,fetch_mode="one",)
 
-    # with get_db_connection() as conn:
-    #     with conn.cursor() as cur:
-    #         if params:
-    #             cur.execute(query, params)
-    #         else:
-    #             cur.execute(query)
-    #         row = cur.fetchone()
-
     if not row:
         raise RuntimeError(f"A query {query_name!r} não devolveu resultados.")
 
@@ -345,13 +339,7 @@ def run_single_row_query(conn, query_name: str, query: str, params: dict | None 
 
 # Execução genérica de queries com várias linhas
 def run_multi_row_query(conn, query_name: str,query: str, params: dict | None = None) -> list[dict[str, object]]:
-    # with get_db_connection() as conn:
-    #     with conn.cursor() as cur:
-    #         if params:
-    #             cur.execute(query, params)
-    #         else:
-    #             cur.execute(query)
-    #         rows = cur.fetchall()
+    
     rows = execute_query(conn=conn,query_name=query_name,query=query,params=params,fetch_mode="all",)
 
     if not rows:
@@ -452,20 +440,6 @@ def has_production_for_date(conn, report_day: date) -> bool:
     )
 
     has_production = total_kg >= min_kg
-
-    # row = run_single_vinc_row_query(
-    #     conn=conn,
-    #     query_name="has_report_activity",
-    #     query=QUERY_HAS_REPORT_ACTIVITY,
-    #     params={
-    #         "report_date": report_day,
-    #         "min_activity_kg": min_kg,
-    #     },
-    # )
-
-    # has_production = bool(row.get("has_production", False))
-
-    # print(f"[INFO] Atividade em "f"{report_day:%d/%m/%Y}: "f"{has_production}",flush=True,)
 
     print(
         f"[INFO] Produção {report_day:%d/%m/%Y}: "
@@ -882,7 +856,9 @@ def build_desinf_trit_desinfecoes_block(
         rows=formatted_rows,
     )
 
-# Builder Desinfeção VINC - Total Silos às 8h
+# Apresentação do mesmo snapshot em duas tabelas com largura idêntica.
+# As 10 quantidades são obtidas por UMA consulta a mov_granulados.silos.
+# A tabela 1 apresenta 6 colunas; a tabela 2 apresenta 4 colunas mais largas.
 def build_desinf_vinc_silos_8h_block(
         values: dict[str, object],
         snapshot_label: str,
@@ -895,7 +871,6 @@ def build_desinf_vinc_silos_8h_block(
         "SILO 5: 1A2 VINC",
         "SILO 6: 05A1 VINC",
     ]
-
     row = {
         "_styles": {},
         "_header_styles": {
@@ -917,6 +892,32 @@ def build_desinf_vinc_silos_8h_block(
             "Peso Silos Desinfeção VINC às 8h "
             f"({snapshot_label})"
         ),
+        headers=headers,
+        rows=[row],
+    )
+
+# Segundo quadro VINC, abaixo dos silos 1-6.
+# Utiliza a MESMA linha que a QUERY_DESINF_VINC_8H já devolve.
+def build_desinf_vinc_silos_7a10_block(
+        values: dict[str, object],
+        snapshot_label: str,
+) -> ReportTableBlock:
+    headers = [
+        "SILO 7: 05A1 XF",
+        "SILO 8: 1A2 XF",
+        "SILO 9: 2A3 XF",
+        "SILO 10: 3A7 XF",
+    ]
+    row = {
+        "_styles": {},
+        "_header_styles": {header: "blue" for header in headers},
+    }
+    for header in headers:
+        row[header] = format_kg(values.get(header, 0))
+
+    return ReportTableBlock(
+        key="desinf_vinc_silos_7a10_8h",
+        title=f"Peso Silos 7 a 10 às 8h ({snapshot_label})",
         headers=headers,
         rows=[row],
     )
@@ -1267,6 +1268,10 @@ def get_daily_sections(conn, report_date: datetime, current_date: date) -> list[
             desinf_vinc_silos_values,
             snapshot_label,
         ),
+        build_desinf_vinc_silos_7a10_block(
+            desinf_vinc_silos_values,
+            snapshot_label,
+        ),
     ]
 
     # Resultado final
@@ -1526,14 +1531,17 @@ def main() -> None:
 
                 errors.append(error)
 
-            # finally:
-            #     if pdf_path and pdf_path.exists():
-            #         pdf_path.unlink()
-
-            #         print(f"[INFO] PDF apagado: " f"{pdf_path}",flush=True,)
-
     if errors:
         raise RuntimeError(" | ".join(errors))
 
 if __name__ == "__main__":
+    # Segurança: nunca ignorar argumentos desconhecidos e enviar o diário.
+    # O modo de domingo é EXCLUSIVO de sunday_vinc.py.
+    import sys
+    if len(sys.argv) != 1:
+        raise SystemExit(
+            "app.py executa apenas o relatório diário, sem argumentos. "
+            "Para domingo usar: python sunday_vinc.py --preview "
+            "ou python sunday_vinc.py --send"
+        )
     main()
