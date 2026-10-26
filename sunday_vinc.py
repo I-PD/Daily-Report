@@ -98,7 +98,7 @@ def render_table(headers: list[str], values: dict[str, object]) -> str:
         elif silo_id <= 6:
             bg = "#5794f2"
         else:
-            bg = "#f2495c"
+            bg = "#ee4b2b"
         th_cells.append(
             f'<th style="border:1px solid #999999;background:{bg};'
             'color:#fff;padding:7px 2px;text-align:center;font-size:12px;'
